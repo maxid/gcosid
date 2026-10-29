@@ -1,6 +1,6 @@
 # gcosid
 
-Segment and snowflake ID generation in Go, compatible with the CosID concepts used by XDMP.
+Segment and snowflake ID generation in Go.
 
 > Status: **experimental scaffold** (v0.0.0-dev).
 
@@ -9,7 +9,7 @@ Segment and snowflake ID generation in Go, compatible with the CosID concepts us
 - Snowflake IDs with configurable machine bits
 - Segment (DB-backed) allocator with prefetch
 - Chain mode and ID prefix conversion
-- Same numeric layout/constraints as existing IDs
+- Stable numeric layout for stored IDs
 
 ## Install
 
