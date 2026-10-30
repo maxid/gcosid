@@ -15,7 +15,6 @@ import (
 	rdb "github.com/redis/go-redis/v9"
 	mysqlcontainer "github.com/testcontainers/testcontainers-go/modules/mysql"
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/maxid/gcosid"
 	"github.com/maxid/gcosid/database"
