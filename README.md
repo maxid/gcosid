@@ -19,8 +19,8 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Snowflake: layout/epoch/sequence + ms, second and JS-safe variants | done |
 | Machine-id distribution: manual / Redis / JDBC | planned |
 | Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
-| String converters: radix (10/16/32/36/62), prefix, group | planned |
-| Snowflake-friendly id (JS-safe rendering) | planned |
+| String converters: radix 2..62, prefix, suffix, date-prefix, grouped, to-string | done |
+| Snowflake-friendly rendering `timestamp-machine-sequence` | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured
