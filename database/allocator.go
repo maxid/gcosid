@@ -53,7 +53,18 @@ func (a *Allocator) NextMaxId(ctx context.Context, name string, step int64) (int
 	}
 	key := a.key(name)
 
-	res, err := a.db.ExecContext(ctx, a.dialect.Increment(), step, key)
+	// UPDATE and SELECT must run in one transaction, exactly like CosID's
+	// JdbcIdSegmentDistributor (setAutoCommit(false)). With two autocommitted
+	// statements the UPDATE locks the row, a second caller increments it, and
+	// our SELECT then reads the *newer* value — both callers would reserve the
+	// same range. The integration test reproduces that failure.
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", gcosid.ErrAllocatorUnavailable, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, a.dialect.Increment(), step, key)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", gcosid.ErrAllocatorUnavailable, err)
 	}
@@ -63,10 +74,14 @@ func (a *Allocator) NextMaxId(ctx context.Context, name string, step int64) (int
 	}
 
 	var maxID int64
-	if err := a.db.QueryRowContext(ctx, a.dialect.Fetch(), key).Scan(&maxID); err != nil {
+	if err := tx.QueryRowContext(ctx, a.dialect.Fetch(), key).Scan(&maxID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrSegmentMissing
 		}
+		return 0, fmt.Errorf("%w: %w", gcosid.ErrAllocatorUnavailable, err)
+	}
+
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("%w: %w", gcosid.ErrAllocatorUnavailable, err)
 	}
 	return maxID, nil

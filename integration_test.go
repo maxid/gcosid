@@ -231,7 +231,7 @@ func mysqlImage() string {
 	if v := os.Getenv("GCOSID_MYSQL_IMAGE"); v != "" {
 		return v
 	}
-	return "mysql:8.4"
+	return "mysql:8.4.7"
 }
 
 func redisImage() string {

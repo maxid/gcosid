@@ -30,12 +30,14 @@ func TestNextMaxIdReservesThenReadsBack(t *testing.T) {
 	alloc, mock := newAllocator(t, database.WithNamespace("xdmp"))
 	ctx := context.Background()
 
+	mock.ExpectBegin()
 	mock.ExpectExec("update cosid set last_max_id").
 		WithArgs(int64(100), "xdmp.order").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("select last_max_id from cosid").
 		WithArgs("xdmp.order").
 		WillReturnRows(sqlmock.NewRows([]string{"last_max_id"}).AddRow(int64(100)))
+	mock.ExpectCommit()
 
 	maxID, err := alloc.NextMaxId(ctx, "order", 100)
 	if err != nil {
@@ -54,9 +56,11 @@ func TestNextMaxIdReservesThenReadsBack(t *testing.T) {
 func TestNextMaxIdReportsMissingSegment(t *testing.T) {
 	alloc, mock := newAllocator(t)
 
+	mock.ExpectBegin()
 	mock.ExpectExec("update cosid set last_max_id").
 		WithArgs(int64(10), "order").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
 
 	if _, err := alloc.NextMaxId(context.Background(), "order", 10); !errors.Is(err, database.ErrSegmentMissing) {
 		t.Fatalf("err = %v, want ErrSegmentMissing", err)
@@ -66,9 +70,11 @@ func TestNextMaxIdReportsMissingSegment(t *testing.T) {
 func TestNextMaxIdMapsDatabaseErrorsToUnavailable(t *testing.T) {
 	alloc, mock := newAllocator(t)
 
+	mock.ExpectBegin()
 	mock.ExpectExec("update cosid set last_max_id").
 		WithArgs(int64(10), "order").
 		WillReturnError(errors.New("connection refused"))
+	mock.ExpectRollback()
 
 	if _, err := alloc.NextMaxId(context.Background(), "order", 10); !errors.Is(err, gcosid.ErrAllocatorUnavailable) {
 		t.Fatalf("err = %v, want ErrAllocatorUnavailable", err)
@@ -87,12 +93,14 @@ func TestPostgresDialectUsesNumberedPlaceholders(t *testing.T) {
 		t.Fatalf("allocator: %v", err)
 	}
 
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE cosid SET last_max_id").
 		WithArgs(int64(5), "order").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT last_max_id FROM cosid").
 		WithArgs("order").
 		WillReturnRows(sqlmock.NewRows([]string{"last_max_id"}).AddRow(int64(5)))
+	mock.ExpectCommit()
 
 	if _, err := alloc.NextMaxId(context.Background(), "order", 5); err != nil {
 		t.Fatalf("next: %v", err)
