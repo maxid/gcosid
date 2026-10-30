@@ -16,9 +16,9 @@ Consumers pick a generator; the library never mixes layouts silently.
 | `SegmentAllocator` port + in-memory allocator | done |
 | DB segment allocator: `cosid(name,last_max_id,last_fetch_time)` reserve-then-read (MySQL, Postgres) | done |
 | Segment TTL / expiry abandonment, step tuning | done (TTL) / planned (step) |
-| Snowflake: bit layout, epoch, machine bits, sequence | planned |
+| Snowflake: layout/epoch/sequence + ms, second and JS-safe variants | done |
 | Machine-id distribution: manual / Redis / JDBC | planned |
-| Clock-moved-backwards policy (wait vs error) | planned |
+| Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
 | String converters: radix (10/16/32/36/62), prefix, group | planned |
 | Snowflake-friendly id (JS-safe rendering) | planned |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
