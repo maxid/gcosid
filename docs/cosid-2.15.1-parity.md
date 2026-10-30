@@ -1,0 +1,108 @@
+# CosID 2.15.1 parity notes
+
+Target: **CosID 2.15.1** (`Ahoo-Wang/CosID` tag `v2.15.1`), the version the Java
+platform runs. Everything below is read from that tag, not from memory or the
+upstream docs of a different major version.
+
+> Why the version matters: CosID 5.0 is a full rewrite that explicitly keeps no
+> backward compatibility (different storage layout, `RangeStore`, lease-based
+> machine slots). Porting 5.x semantics would produce ids the Java side cannot
+> continue, so 2.15.1 is the only useful baseline here.
+
+## Segment storage
+
+The Java implementation does **not** use an `id_segment(max_id, step, version)`
+row with optimistic locking. It keeps one counter row per namespace:
+
+```sql
+create table if not exists cosid
+(
+    name            varchar(100) not null comment '{namespace}.{name}',
+    last_max_id     bigint unsigned not null default 0,
+    last_fetch_time bigint unsigned not null default 0,
+    constraint cosid_pk primary key (name)
+) engine = InnoDB;
+```
+
+Allocation (`JdbcIdSegmentDistributor`):
+
+1. `UPDATE cosid SET last_max_id = last_max_id + ?, last_fetch_time = unix_timestamp() WHERE name = ?`
+2. `SELECT last_max_id FROM cosid WHERE name = ?`
+
+The returned `last_max_id` is the **end** of the newly reserved range. The range
+is `(maxId - step, maxId]`: `DefaultIdSegment.offset = maxId - step`, and the
+first id handed out is `offset + 1`.
+
+Consequences for this library:
+
+- No `version` column, no compare-and-set retry loop. The `UPDATE` itself is the
+  atomic reservation; a second statement reads it back.
+- `name` is `{namespace}.{name}` (`IdSegmentDistributorDefinition`), so the
+  namespace is part of the key rather than a separate column.
+- Reservation is per `step`, and the caller may ask for a larger step than the
+  configured one (multi-segment reservation) — the distributed range still has
+  to stay contiguous.
+
+## Segment semantics
+
+`IdSegment` (from `cosid-core/.../segment/IdSegment.java`):
+
+| Field | Meaning |
+|---|---|
+| `offset` | `maxId - step`; the first id handed out is `offset + 1` |
+| `maxId` | inclusive upper bound |
+| `sequence` | next available id, `-1` means overflow (`SEQUENCE_OVERFLOW`) |
+| `step` | size of the range |
+| `fetchTime` | seconds when the range was fetched |
+| `ttl` | `Long.MAX_VALUE` means never expires |
+
+`isAvailable()` = not expired and not overflowed. `SegmentChainId` keeps a chain
+of segments with a `safeDistance` lookahead and prefetches the next one before
+the current runs out; a fetched range that arrives after the chain moved on is
+still usable only while it does not overlap (`NextIdSegmentExpiredException`
+otherwise).
+
+## Snowflake
+
+- Epoch `CosId.COSID_EPOCH = 1577203200000` (milliseconds; seconds variant uses
+  `1577203200`).
+- Layout is `timestampBits | machineBits | sequenceBits`; the JavaScript-safe
+  variant limits the sum of the bits so the value stays below
+  `JAVA_SCRIPT_MAX_SAFE_NUMBER_BIT`.
+- `MillisecondSnowflakeId` / `SecondSnowflakeId` differ only in the time unit;
+  `ClockSyncSnowflakeId` wraps a generator with `ClockBackwardsSynchronizer`
+  instead of throwing; `SafeJavaScriptSnowflakeId` narrows the layout.
+- `SnowflakeFriendlyId` renders `{timestamp}-{machine}-{sequence}` style strings
+  via `SnowflakeIdStateParser`, which is a *rendering*, not part of the id.
+
+## Machines
+
+`MachineIdDistributor` assigns the machine id: `ManualMachineIdDistributor`
+(fixed), JDBC and Redis stores (leased, with `MachineState`), and a Kubernetes
+StatefulSet variant. `MachineIdGuarder` keeps the lease alive; losing it raises
+`MachineIdLostException`.
+
+## Converters (`cosid-core/.../converter`)
+
+`RadixIdConverter` (bases 2..62), `Radix36IdConverter`, `Radix62IdConverter`,
+`PrefixIdConverter`, `SuffixIdConverter`, `DatePrefixIdConverter`,
+`GroupedPrefixIdConverter`, `SnowflakeFriendlyIdConverter`, `ToStringIdConverter`.
+Converters are pure rendering: the numeric id never depends on them.
+
+## What this means for the Go port
+
+Current `segment.go` differs in three ways and must be aligned:
+
+1. **Storage shape**: it assumed a pluggable `SegmentAllocator` returning
+   `[start, end]`. That port is fine, but the JDBC allocator must implement the
+   `cosid(name, last_max_id, last_fetch_time)` protocol above — not a
+   `max_id + step` with a version column.
+2. **Range arithmetic**: switch to `offset = maxId - step`, first id `offset+1`,
+   and model the segment as `{offset, maxId, sequence, step, fetchTime, ttl}`
+   instead of `{Start, End}`.
+3. **Expiry**: `ttl` is part of `isAvailable()`; a segment whose ttl elapsed must
+   not be handed out, which the current implementation has no notion of.
+
+Still missing for parity: `SegmentChainId` safe-distance prefetch, snowflake
+(three variants + clock synchronizer), machine-id distributors, and all
+converters.
