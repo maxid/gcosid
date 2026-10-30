@@ -17,7 +17,7 @@ Consumers pick a generator; the library never mixes layouts silently.
 | DB segment allocator: `cosid(name,last_max_id,last_fetch_time)` reserve-then-read (MySQL, Postgres) | done |
 | Segment TTL / expiry abandonment, step tuning | done (TTL) / planned (step) |
 | Snowflake: layout/epoch/sequence + ms, second and JS-safe variants | done |
-| Machine-id distribution: manual / Redis / JDBC | planned |
+| Machine-id distribution: manual fixed id, leased slot port, in-memory store | done (JDBC/Redis adapters pending) |
 | Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
 | String converters: radix 2..62, prefix, suffix, date-prefix, grouped, to-string | done |
 | Snowflake-friendly rendering `timestamp-machine-sequence` | done |
