@@ -2,23 +2,40 @@ package gcosid
 
 import (
 	"context"
+	"math"
 	"sync"
+	"time"
 )
 
-// Segment is one allocated range of ids, both ends inclusive.
+// TTLForever marks a segment that never expires (CosID's
+// IdSegment.TIME_TO_LIVE_FOREVER).
+const TTLForever = math.MaxInt64
+
+// Segment is one reserved range, modelled exactly like CosID 2.15.1's
+// IdSegment: the range is (Offset, MaxID], the first id handed out is
+// Offset+1, and TTL participates in availability.
 type Segment struct {
-	Start int64
-	End   int64
+	Offset    int64 // MaxID - Step
+	MaxID     int64 // inclusive upper bound
+	Step      int64
+	FetchTime int64 // unix seconds
+	TTL       int64 // seconds; TTLForever means never
 }
 
-// SegmentAllocator hands out disjoint ranges. The database implementation
-// performs the atomic max_id bump; the port keeps the generator testable.
-//
-// An allocator must never return the same range twice for the same namespace,
-// and must return ErrAllocatorUnavailable for transient failures so the
-// generator can retry without changing its layout.
+// Available reports whether the segment may still hand out ids at `now`
+// (unix seconds).
+func (s Segment) Available(now int64) bool {
+	if s.TTL == TTLForever {
+		return true
+	}
+	return now < s.FetchTime+s.TTL
+}
+
+// SegmentAllocator reserves a range and returns its upper bound, mirroring
+// CosID's IdSegmentDistributor.nextMaxId(step). The range is
+// (maxId-step, maxId].
 type SegmentAllocator interface {
-	NextSegment(ctx context.Context, namespace string) (Segment, error)
+	NextMaxId(ctx context.Context, namespace string, step int64) (int64, error)
 }
 
 // MemoryAllocator is an in-process allocator for tests and single-process
@@ -29,8 +46,8 @@ type MemoryAllocator struct {
 	cursor map[string]int64
 }
 
-// NewMemoryAllocator creates an allocator handing out ranges of `step` ids
-// starting at 1.
+// NewMemoryAllocator creates an allocator using `step` when the caller does not
+// request one.
 func NewMemoryAllocator(step int64) *MemoryAllocator {
 	if step <= 0 {
 		step = 100
@@ -38,13 +55,17 @@ func NewMemoryAllocator(step int64) *MemoryAllocator {
 	return &MemoryAllocator{step: step, cursor: map[string]int64{}}
 }
 
-// NextSegment implements SegmentAllocator.
-func (m *MemoryAllocator) NextSegment(_ context.Context, namespace string) (Segment, error) {
+// NextMaxId implements SegmentAllocator.
+func (m *MemoryAllocator) NextMaxId(_ context.Context, namespace string, step int64) (int64, error) {
+	if step <= 0 {
+		step = m.step
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	start := m.cursor[namespace] + 1
-	end := start + m.step - 1
-	m.cursor[namespace] = end
-	return Segment{Start: start, End: end}, nil
+	next := m.cursor[namespace] + step
+	m.cursor[namespace] = next
+	return next, nil
 }
+
+// clockSeconds is the default time source for TTL checks.
+func clockSeconds() int64 { return time.Now().Unix() }

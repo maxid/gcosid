@@ -11,11 +11,11 @@ Consumers pick a generator; the library never mixes layouts silently.
 
 | CosID capability | Status |
 |---|---|
-| Segment generator: local range cursor, inclusive bounds | done |
+| Segment generator: `IdSegment{offset,maxId,sequence,step,fetchTime,ttl}` arithmetic (CosID 2.15.1) | done |
 | Double buffering / chain prefetch with bounded timeout | done |
 | `SegmentAllocator` port + in-memory allocator | done |
-| DB segment allocator (atomic `max_id` bump, dialect SQL) | planned |
-| Step start / step size / lazy distributor tuning | planned |
+| DB segment allocator: `cosid(name,last_max_id,last_fetch_time)` reserve-then-read | planned |
+| Segment TTL / expiry abandonment, step tuning | done (TTL) / planned (step) |
 | Snowflake: bit layout, epoch, machine bits, sequence | planned |
 | Machine-id distribution: manual / Redis / JDBC | planned |
 | Clock-moved-backwards policy (wait vs error) | planned |

@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// countingAllocator wraps a MemoryAllocator to observe how often a range is
-// fetched, which is what double buffering is supposed to reduce.
+// countingAllocator observes how often a range is reserved.
 type countingAllocator struct {
 	inner *MemoryAllocator
 	mu    sync.Mutex
@@ -17,15 +16,15 @@ type countingAllocator struct {
 	err   error
 }
 
-func (c *countingAllocator) NextSegment(ctx context.Context, namespace string) (Segment, error) {
+func (c *countingAllocator) NextMaxId(ctx context.Context, namespace string, step int64) (int64, error) {
 	c.mu.Lock()
 	c.calls++
 	err := c.err
 	c.mu.Unlock()
 	if err != nil {
-		return Segment{}, err
+		return 0, err
 	}
-	return c.inner.NextSegment(ctx, namespace)
+	return c.inner.NextMaxId(ctx, namespace, step)
 }
 
 func (c *countingAllocator) Calls() int {
@@ -34,11 +33,39 @@ func (c *countingAllocator) Calls() int {
 	return c.calls
 }
 
-func TestSegmentGeneratorHandsOutEveryIDOnce(t *testing.T) {
-	g, err := NewSegmentGenerator("order", NewMemoryAllocator(100))
+func newGenerator(t *testing.T, step int64, opts ...SegmentOption) (*SegmentGenerator, *countingAllocator) {
+	t.Helper()
+	alloc := &countingAllocator{inner: NewMemoryAllocator(step)}
+	g, err := NewSegmentGenerator("order", step, alloc, opts...)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
+	return g, alloc
+}
+
+// The first id of a reserved range is offset+1, and offset is maxId-step — the
+// CosID 2.15.1 default segment arithmetic.
+func TestSegmentArithmeticMatchesCosID(t *testing.T) {
+	g, _ := newGenerator(t, 100)
+	defer g.Close(context.Background())
+
+	first, err := g.Next(context.Background())
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("first id = %d, want 1 (maxId 100 - step 100 + 1)", first)
+	}
+	if !g.current.Available(g.now()) {
+		t.Fatal("a fresh segment must be available")
+	}
+	if g.current.Offset != 0 || g.current.MaxID != 100 {
+		t.Fatalf("segment = %+v, want offset 0 maxId 100", g.current)
+	}
+}
+
+func TestSegmentGeneratorHandsOutEveryIDOnce(t *testing.T) {
+	g, _ := newGenerator(t, 100)
 	defer g.Close(context.Background())
 
 	seen := map[int64]bool{}
@@ -60,10 +87,7 @@ func TestSegmentGeneratorHandsOutEveryIDOnce(t *testing.T) {
 }
 
 func TestSegmentGeneratorIsConcurrencySafe(t *testing.T) {
-	g, err := NewSegmentGenerator("order", NewMemoryAllocator(50))
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	g, _ := newGenerator(t, 50)
 	defer g.Close(context.Background())
 
 	const goroutines, perGoroutine = 8, 200
@@ -99,11 +123,7 @@ func TestSegmentGeneratorIsConcurrencySafe(t *testing.T) {
 }
 
 func TestSegmentGeneratorPrefetches(t *testing.T) {
-	alloc := &countingAllocator{inner: NewMemoryAllocator(100)}
-	g, err := NewSegmentGenerator("order", alloc)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	g, alloc := newGenerator(t, 100)
 	defer g.Close(context.Background())
 
 	for i := 0; i < 600; i++ {
@@ -111,18 +131,42 @@ func TestSegmentGeneratorPrefetches(t *testing.T) {
 			t.Fatalf("next: %v", err)
 		}
 	}
-
-	// 600 ids need 6 ranges; prefetch may fetch one ahead, but never one per
-	// refill (that would be the no-prefetch behaviour with 6+ synchronous
-	// fetches plus waiting).
 	if calls := alloc.Calls(); calls > 9 {
 		t.Fatalf("allocator calls = %d, want <= 9 for 600 ids with step 100", calls)
 	}
 }
 
+// An expired range must be abandoned, never partially reused: the ids below the
+// cursor may already have been handed to another instance.
+func TestSegmentGeneratorAbandonsExpiredRange(t *testing.T) {
+	now := int64(1000)
+	g, _ := newGenerator(t, 10, WithSegmentTTL(10*time.Second), WithSegmentClock(func() int64 { return now }))
+	defer g.Close(context.Background())
+
+	first, err := g.Next(context.Background())
+	if err != nil {
+		t.Fatalf("next: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("first id = %d, want 1", first)
+	}
+
+	now += 11 // past the ttl
+	afterExpiry, err := g.Next(context.Background())
+	if err != nil {
+		t.Fatalf("next after expiry: %v", err)
+	}
+	if afterExpiry <= 10 {
+		t.Fatalf("id %d came from the expired range", afterExpiry)
+	}
+	if afterExpiry != 11 {
+		t.Fatalf("id = %d, want the first id of the next range (11)", afterExpiry)
+	}
+}
+
 func TestSegmentGeneratorSurfacesAllocatorFailure(t *testing.T) {
 	alloc := &countingAllocator{inner: NewMemoryAllocator(10), err: errors.New("db down")}
-	g, err := NewSegmentGeneratorWithPrefetch("order", alloc, 0)
+	g, err := NewSegmentGenerator("order", 10, alloc, WithPrefetchRatio(0))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
@@ -132,7 +176,6 @@ func TestSegmentGeneratorSurfacesAllocatorFailure(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAllocatorUnavailable", err)
 	}
 
-	// Recovery: once the allocator works again, the generator keeps going.
 	alloc.mu.Lock()
 	alloc.err = nil
 	alloc.mu.Unlock()
@@ -143,10 +186,7 @@ func TestSegmentGeneratorSurfacesAllocatorFailure(t *testing.T) {
 }
 
 func TestSegmentGeneratorClose(t *testing.T) {
-	g, err := NewSegmentGenerator("order", NewMemoryAllocator(10))
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	g, _ := newGenerator(t, 10)
 	if _, err := g.Next(context.Background()); err != nil {
 		t.Fatalf("next: %v", err)
 	}
@@ -165,13 +205,13 @@ func TestSegmentGeneratorClose(t *testing.T) {
 }
 
 func TestNewSegmentGeneratorRejectsBadConfig(t *testing.T) {
-	if _, err := NewSegmentGenerator("", NewMemoryAllocator(10)); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewSegmentGenerator("", 10, NewMemoryAllocator(10)); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("empty namespace err = %v", err)
 	}
-	if _, err := NewSegmentGenerator("order", nil); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewSegmentGenerator("order", 10, nil); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("nil allocator err = %v", err)
 	}
-	if _, err := NewSegmentGeneratorWithPrefetch("order", NewMemoryAllocator(10), 2); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("ratio err = %v", err)
+	if _, err := NewSegmentGenerator("order", 0, NewMemoryAllocator(10)); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("zero step err = %v", err)
 	}
 }
