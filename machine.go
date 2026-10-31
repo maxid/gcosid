@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // MachineState is the leased machine slot CosID keeps in `cosid_machine`
@@ -24,6 +25,9 @@ type MachineIdDistributor interface {
 	Distribute(ctx context.Context, namespace string) (int64, error)
 	// Revert releases the slot on shutdown.
 	Revert(ctx context.Context) error
+	// Guard renews the lease on the slot. Returning an error means the slot may
+	// already belong to another instance.
+	Guard(ctx context.Context, namespace string) error
 	// InstanceID identifies this process in the state store.
 	InstanceID() string
 }
@@ -63,6 +67,10 @@ func (m *ManualDistributor) Distribute(_ context.Context, _ string) (int64, erro
 
 // Revert implements MachineIdDistributor: a manual id has nothing to release.
 func (m *ManualDistributor) Revert(context.Context) error { return nil }
+
+// Guard implements MachineIdDistributor: a manual id is configured, not leased,
+// so there is nothing to renew.
+func (m *ManualDistributor) Guard(context.Context, string) error { return nil }
 
 // InstanceID implements MachineIdDistributor.
 func (m *ManualDistributor) InstanceID() string { return m.Instance }
@@ -156,6 +164,26 @@ func (l *LeaseDistributor) Distribute(ctx context.Context, namespace string) (in
 // Revert releases nothing implicitly: the slot stays reserved for this instance
 // so a restart reuses the same machine id instead of racing for a new one.
 func (l *LeaseDistributor) Revert(context.Context) error { return nil }
+
+// Guard implements MachineIdDistributor: refresh the slot's last_timestamp so the
+// safe-guard window does not expire. A missing slot means the lease is gone.
+func (l *LeaseDistributor) Guard(ctx context.Context, namespace string) error {
+	if l.namespace != "" && namespace == "" {
+		namespace = l.namespace
+	}
+	state, ok, err := l.storage.Get(ctx, namespace, l.instanceID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: no machine slot for instance %s", ErrInvalidMachineID, l.instanceID)
+	}
+	state.LastTimestamp = time.Now().UnixMilli()
+	if err := l.storage.Update(ctx, namespace, state); err != nil {
+		return err
+	}
+	return nil
+}
 
 // InstanceID implements MachineIdDistributor.
 func (l *LeaseDistributor) InstanceID() string { return l.instanceID }

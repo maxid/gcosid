@@ -22,6 +22,8 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Segment TTL / expiry abandonment, step tuning | done (TTL) / planned (step) |
 | Snowflake: layout/epoch/sequence + ms, second and JS-safe variants | done |
 | Machine-id distribution: manual id, leased slots — in-memory, JDBC `cosid_machine`, Redis Lua scripts (verbatim 2.15.1) | done |
+| Machine-id guard: periodic lease renewal with failure state (`MachineIdGuarder`) | done |
+| Kubernetes StatefulSet distributor (machine id = pod ordinal) | done |
 | Storage adapters: MongoDB, ZooKeeper | planned |
 | Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
 | String converters: radix 2..62, prefix, suffix, date-prefix, grouped, to-string | done |

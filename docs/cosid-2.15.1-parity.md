@@ -123,6 +123,15 @@ Two details that decide whether Go and Java can share the tables:
 3. On a duplicate-key insert the JDBC distributor **re-reads and retries**
    (`distributeMachine` recurses) instead of failing the allocation.
 
+`DefaultMachineIdGuarder` renews every registered slot on a fixed delay
+(`initialDelay = DEFAULT_DELAY = 1 minute`) and records a `GuardianState` per
+(namespace, instance). A failed guard is not retried silently: it means another
+instance may already own the machine id.
+
+`k8s.StatefulSetMachineIdDistributor` derives the machine id from the pod
+ordinal: the substring after the **last** `-` of `HOSTNAME` (`xdmp-iot-7` → 7).
+Guard and revert are no-ops there — the scheduler owns the ordinal.
+
 ## Converters (`cosid-core/.../converter`)
 
 `RadixIdConverter` (bases 2..62), `Radix36IdConverter`, `Radix62IdConverter`,
