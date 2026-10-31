@@ -14,6 +14,7 @@ Consumers pick a generator; the library never mixes layouts silently.
 | CosID capability | Status |
 |---|---|
 | Segment generator: `IdSegment{offset,maxId,sequence,step,fetchTime,ttl}` arithmetic (CosID 2.15.1) | done |
+| Segment chain (`SegmentChainId`): safe distance 2, hunger-adaptive prefetch | done |
 | Double buffering / chain prefetch with bounded timeout | done |
 | `SegmentAllocator` port + in-memory allocator | done |
 | DB segment allocator: `cosid(name,last_max_id,last_fetch_time)` reserve-then-read (MySQL, Postgres) | done |
@@ -24,7 +25,11 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Storage adapters: MongoDB, ZooKeeper | planned |
 | Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
 | String converters: radix 2..62, prefix, suffix, date-prefix, grouped, to-string | done |
-| Snowflake-friendly rendering `timestamp-machine-sequence` | done |
+| Snowflake-friendly rendering `<yyyyMMddHHmmss[SSS]>-<machine>-<sequence>` | done |
+| Integer / string generator views (`IntegerIdGenerator`, `StringIdGenerator`) | done |
+| `jvm.AtomicLongGenerator`, `jvm.UuidGenerator` | done |
+| CosID string family (`Radix36/62CosIdGenerator`, 44/20/16 layout) | done |
+| Generator registry (`IdGeneratorProvider`) and `LazyIdGenerator` | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured
