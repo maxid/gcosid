@@ -91,22 +91,44 @@ func TestDatePrefix(t *testing.T) {
 	}
 }
 
-func TestSnowflakeFriendlyRendering(t *testing.T) {
+// CosID's MillisecondSnowflakeIdStateParser renders
+// <yyyyMMddHHmmssSSS>-<machineId>-<sequence>, in the parser's zone. The epoch is
+// 2019-12-24T16:00:00Z, so epoch+1s is 2019-12-24T16:00:01Z.
+func TestSnowflakeFriendlyMillisecond(t *testing.T) {
 	l := MillisecondLayout
 	id, err := l.Compose(CosIdEpoch+1000, 3, 5)
 	if err != nil {
 		t.Fatalf("compose: %v", err)
 	}
 
-	got := SnowflakeFriendly{Layout: l}.Format(id)
-	want := "1577203201000-3-5"
-	if got != want {
+	got := SnowflakeFriendly{Layout: l, Millis: true, Location: time.UTC}.Format(id)
+	if want := "20191224160001000-3-5"; got != want {
 		t.Fatalf("friendly = %q, want %q", got, want)
+	}
+
+	// padStart pads machine and sequence to their decimal width (10 bits -> 4).
+	padded := SnowflakeFriendly{Layout: l, Millis: true, Location: time.UTC, PadStart: true}.Format(id)
+	if want := "20191224160001000-0003-0005"; padded != want {
+		t.Fatalf("padded = %q, want %q", padded, want)
 	}
 
 	// Rendering must not change the numeric id.
 	if state := l.Parse(id); state.MachineID != 3 || state.Sequence != 5 {
 		t.Fatalf("state = %+v", state)
+	}
+}
+
+// SecondSnowflakeIdStateParser drops the millisecond part.
+func TestSnowflakeFriendlySecond(t *testing.T) {
+	l := SecondLayout
+	id, err := l.Compose(CosIdEpochSecond+1, 3, 5)
+	if err != nil {
+		t.Fatalf("compose: %v", err)
+	}
+
+	got := SnowflakeFriendly{Layout: l, Location: time.UTC}.Format(id)
+	if want := "20191224160001-3-5"; got != want {
+		t.Fatalf("friendly = %q, want %q", got, want)
 	}
 }
 

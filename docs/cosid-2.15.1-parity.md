@@ -72,8 +72,26 @@ otherwise).
 - `MillisecondSnowflakeId` / `SecondSnowflakeId` differ only in the time unit;
   `ClockSyncSnowflakeId` wraps a generator with `ClockBackwardsSynchronizer`
   instead of throwing; `SafeJSSnowflakeId` narrows the layout.
-- `SnowflakeFriendlyId` renders `{timestamp}-{machine}-{sequence}` style strings
-  via `SnowflakeIdStateParser`, which is a *rendering*, not part of the id.
+- `SnowflakeFriendlyId` is a **formatted local date-time**, not the raw epoch
+  value (`SnowflakeIdStateParser.parse`):
+
+  | parser | format | example |
+  |---|---|---|
+  | `MillisecondSnowflakeIdStateParser` | `yyyyMMddHHmmssSSS-machineId-sequence` | `20191224160001000-3-5` |
+  | `SecondSnowflakeIdStateParser` | `yyyyMMddHHmmss-machineId-sequence` | `20191224160001-3-5` |
+
+  The zone is the parser's zone (CosID defaults to the system zone), and
+  `padStart` pads machine/sequence to their decimal width
+  (`RadixIdConverter.maxCharSize(10, bits)`). It is a *rendering*: the numeric id
+  is unchanged. An earlier Go version printed the raw epoch millis — wrong.
+
+## Benchmark method
+
+The tag compiles for **JDK 17** (`build.gradle.kts`, `JavaLanguageVersion.of(17)`).
+Rather than running a JDK container, the golden expectations are read directly
+out of the 2.15.1 sources and pinned as literals in the Go tests, each with the
+file it came from. That keeps the check offline and reproducible; a JDK container
+is only needed if a future version's behaviour cannot be read off the source.
 
 ## Machines
 

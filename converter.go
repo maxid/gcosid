@@ -136,14 +136,68 @@ type ToString struct{}
 // Format implements StringConverter.
 func (ToString) Format(id int64) string { return strconv.FormatInt(id, 10) }
 
-// SnowflakeFriendly renders a snowflake id as `<timestamp>-<machine>-<sequence>`
-// using its layout. It is a rendering only: the numeric id is unchanged.
+// SnowflakeFriendly renders a snowflake id the way CosID's
+// Millisecond/SecondSnowflakeIdStateParser does:
+//
+//	<yyyyMMddHHmmss[SSS]>-<machineId>-<sequence>
+//
+// The timestamp is a *formatted local date-time*, not the raw epoch value, and
+// the zone is the parser's zone (CosID defaults to the system zone). It is a
+// rendering only: the numeric id is unchanged.
 type SnowflakeFriendly struct {
-	Layout Layout
+	Layout   Layout
+	Millis   bool           // true for millisecond layouts, false for second layouts
+	Location *time.Location // nil means time.Local, matching CosID's default
+	PadStart bool           // CosID's padStart flag
 }
 
 // Format implements StringConverter.
 func (f SnowflakeFriendly) Format(id int64) string {
 	state := f.Layout.Parse(id)
-	return fmt.Sprintf("%d-%d-%d", state.Timestamp, state.MachineID, state.Sequence)
+
+	location := f.Location
+	if location == nil {
+		location = time.Local
+	}
+	instant := time.Unix(0, state.Timestamp*int64(time.Millisecond)).In(location)
+	if !f.Millis {
+		instant = time.Unix(state.Timestamp, 0).In(location)
+	}
+
+	stamp := instant.Format("20060102150405")
+	if f.Millis {
+		stamp += fmt.Sprintf("%03d", instant.Nanosecond()/int(time.Millisecond))
+	}
+
+	machine := decimalField(state.MachineID, f.Layout.MachineBits, f.PadStart)
+	sequence := decimalField(state.Sequence, f.Layout.SequenceBits, f.PadStart)
+	return stamp + "-" + machine + "-" + sequence
+}
+
+// decimalField renders a field, padding to the decimal width of its bit size
+// when padStart is set (CosID's RadixIdConverter.maxCharSize(10, bits)).
+func decimalField(value int64, bits int, pad bool) string {
+	digits := maxDecimalCharSize(bits)
+	text := strconv.FormatInt(value, 10)
+	if pad && len(text) < digits {
+		text = strings.Repeat("0", digits-len(text)) + text
+	}
+	return text
+}
+
+// maxDecimalCharSize is the number of decimal digits 2^bits-1 needs.
+func maxDecimalCharSize(bits int) int {
+	if bits <= 0 {
+		return 1
+	}
+	max := int64(1)<<uint(bits) - 1
+	digits := 0
+	for max > 0 {
+		digits++
+		max /= 10
+	}
+	if digits == 0 {
+		digits = 1
+	}
+	return digits
 }
