@@ -123,6 +123,20 @@ timeline start and a value (`start.until(time, unit) / amount`).
 interval (`Preconditions.checkArgument(contains(...))`). The Go port keeps that:
 silently clamping would write ids into the wrong shard.
 
+## Diagnostics and uncertainty
+
+`Statistical.stat()` returns a `Stat` describing the component: generators report
+their layout and current position (`SegmentIdStat`: fetchTime/maxId/offset/
+sequence/step/expired/overflow/available; `SnowflakeIdStat`: epoch/bits/
+machineId/lastTimestamp), converters report their rendering parameters. The tree
+is rendered as stable JSON, which is what an operator dashboard reads.
+
+`UncertaintyIdGenerator` prefixes the wrapped id by `uncertaintyBits` and appends
+random low bits (`originalId << bits | random(0, 2^bits)`), throwing
+`OriginalIdOverflowException` when the original id no longer fits in
+`63 - uncertaintyBits`. Ordering survives at the original granularity; the
+trailing digits stop advertising the issue count.
+
 ## Benchmark method
 
 The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).

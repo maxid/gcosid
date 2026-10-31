@@ -24,7 +24,7 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Machine-id distribution: manual id, leased slots — in-memory, JDBC `cosid_machine`, Redis Lua scripts (verbatim 2.15.1) | done |
 | Machine-id guard: periodic lease renewal with failure state (`MachineIdGuarder`) | done |
 | Kubernetes StatefulSet distributor (machine id = pod ordinal) | done |
-| Storage adapters: MongoDB, ZooKeeper | planned |
+| Storage adapters: MongoDB, ZooKeeper | planned (lowest priority) |
 | Clock-moved-backwards policy: strict error or spin/sleep synchroniser | done |
 | String converters: radix 2..62, prefix, suffix, date-prefix, grouped, to-string | done |
 | Snowflake-friendly rendering `<yyyyMMddHHmmss[SSS]>-<machine>-<sequence>` | done |
@@ -34,6 +34,8 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Generator registry (`IdGeneratorProvider`) and `LazyIdGenerator` | done |
 | Grouped segments: per-year / month / day counters and `<group>-<id>` rendering | done |
 | Sharding: `ModCycle`, `IntervalTimeline` (time windows), `CachedSharding` | done |
+| Diagnostics: `Statistical` stats for generators and converters | done |
+| `UncertaintyIdGenerator`: random low bits on top of an ordered id | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured
