@@ -31,6 +31,39 @@ Go 的号段与雪花 ID 生成。
 重启浪费与时钟回退错误——
 "看起来连续" 从来不是削弱唯一性的理由。
 
+## CosID 兼容契约
+
+基线是 CosID **v2.15.1**。本库用于 Java 与 Go 两个进程**写同一批表与 Redis 键**的部署，
+因此下列内容是契约而非实现细节。改动任何一条都会静默破坏混合部署——双方各自
+以为独占了一个机器槽位。
+
+**存储**
+
+- 号段计数表 `cosid(name PK, last_max_id, last_fetch_time)`，`name = {namespace}.{name}`。
+  预留必须在**同一事务**内完成：`UPDATE`（`last_max_id = last_max_id + ?`）与 `SELECT`
+  不能拆成两条自动提交语句，否则两个调用方会读到同一个上界。
+- 机器槽位表 `cosid_machine`，主键 `{namespace}.{补零到 8 位的 machine id}`——补零是主键的一部分。
+- 首个机器号是 **0**：空表时 `max(machine_id)+1` 为 NULL，CosID 把 NULL 读作 0。
+- `revert` 对非稳定实例清空 `instance_id`，对稳定实例保留；`guard` 把影响 0 行判定为租约丢失。
+
+**驱动**
+
+`affected rows` 指**匹配行数**而非变更行数：MySQL Connector/J 默认设置 `CLIENT_FOUND_ROWS`，
+Go 驱动默认不设。请用 `database.OpenMySQL` 打开连接池（它同时开启 `parseTime`）；
+直接用 `sql.Open("mysql", dsn)` 会让一次心跳看起来像租约丢失。
+
+**Redis**
+
+号段用 `cosid:{namespace.name}:adder`，机器槽位用 `cosid:<namespace>:itc_idx` / `:adder` / `:revert`，
+值为 `machineId|lastStamp`。花括号是 Redis Cluster 的 hash tag，不是装饰；机器号脚本逐字取自
+`cosid-spring-redis`。
+
+**ID**
+
+`COSID_EPOCH = 1577203200000`；毫秒布局 41/10/12、秒 31/10/22、JS 安全 41/3/9 与 31/3/19；
+字符串族 44/20/16，按定宽进制字段渲染且不减 epoch；友好格式
+`yyyyMMddHHmmss[SSS]-machine-sequence`。
+
 ## 测试
 
 | 命令 | 覆盖范围 | 依赖 |

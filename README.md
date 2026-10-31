@@ -43,12 +43,47 @@ Rule that will not change: uniqueness is only promised inside a configured
 allocation domain. Gaps, restart waste and clock-regression errors are allowed —
 "looks continuous" is never a reason to weaken uniqueness.
 
-## CosID parity
+## CosID compatibility contract
 
-The baseline is CosID **v2.15.1**. The authoritative parity spec — every SQL
-statement, Redis key and semantic the library must match, and the driver flags
-that make it match — lives in the consuming project:
-[`xdmp-go/docs/design/gcosid-cosid-parity.md`](https://github.com/maxid/xdmp-go/blob/main/docs/design/gcosid-cosid-parity.md).
+The baseline is CosID **v2.15.1**. This library is consumed by deployments where a
+Java process and a Go process write the *same* tables and Redis keys, so the
+following are contracts, not implementation details. Changing any of them
+silently breaks mixed deployments — both sides believe they own a machine slot
+that the other also holds.
+
+**Storage**
+
+- Segment counter table `cosid(name PK, last_max_id, last_fetch_time)`;
+  `name = {namespace}.{name}`. Reserved in one transaction: the `UPDATE`
+  (`last_max_id = last_max_id + ?`) and the `SELECT` must not be split into two
+  autocommitted statements, or two callers can read the same upper bound.
+- Machine slots live in `cosid_machine`, keyed `{namespace}.{8-digit padded
+  machine id}` — the padding is part of the primary key.
+- The first machine id is **0**: `max(machine_id)+1` over an empty table is NULL
+  and CosID reads NULL as 0.
+- `revert` clears `instance_id` for unstable instances and keeps it for stable
+  ones; `guard` treats zero affected rows as a lost lease.
+
+**Driver**
+
+`affected rows` means *matched* rows, not *changed* rows: MySQL Connector/J sets
+`CLIENT_FOUND_ROWS` by default, Go drivers do not. Open the pool with
+`database.OpenMySQL` (it also enables `parseTime`); a plain `sql.Open("mysql", dsn)`
+makes a heartbeat look like a lost lease.
+
+**Redis**
+
+`cosid:{namespace.name}:adder` for segments and `cosid:<namespace>:itc_idx` /
+`:adder` / `:revert` for machine slots, with values formatted `machineId|lastStamp`.
+The braces are a Redis Cluster hash tag, not decoration; the machine scripts are
+copied verbatim from `cosid-spring-redis`.
+
+**Ids**
+
+`COSID_EPOCH = 1577203200000`; millisecond layout 41/10/12, second 31/10/22,
+JavaScript-safe 41/3/9 and 31/3/19; string family 44/20/16 rendered as fixed-width
+radix fields without an epoch offset; friendly rendering
+`yyyyMMddHHmmss[SSS]-machine-sequence`.
 
 ## Testing
 
