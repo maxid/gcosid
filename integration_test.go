@@ -32,6 +32,18 @@ func startMySQL(t *testing.T) *sql.DB {
 	t.Helper()
 	ctx := context.Background()
 
+	// A provided environment wins over containers: CI without Docker can point
+	// these at a real MySQL.
+	if dsn := os.Getenv("GCOSID_TEST_MYSQL_DSN"); dsn != "" {
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			t.Fatalf("open provided mysql: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		seedMySQL(t, db)
+		return db
+	}
+
 	container, err := mysqlcontainer.Run(ctx, mysqlImage(),
 		mysqlcontainer.WithDatabase("cosid"),
 		mysqlcontainer.WithUsername("test"),
@@ -69,11 +81,18 @@ func startMySQL(t *testing.T) *sql.DB {
 		) ENGINE = InnoDB`); err != nil {
 		t.Fatalf("create cosid table: %v", err)
 	}
+	seedMySQL(t, db)
+	return db
+}
+
+func seedMySQL(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO cosid (name, last_max_id, last_fetch_time) VALUES ('xdmp.itest', 0, unix_timestamp())`); err != nil {
+		`INSERT INTO cosid (name, last_max_id, last_fetch_time) VALUES ('xdmp.itest', 0, unix_timestamp())
+		 ON DUPLICATE KEY UPDATE last_max_id = 0`); err != nil {
 		t.Fatalf("seed cosid row: %v", err)
 	}
-	return db
 }
 
 // TestMySQLSegmentReservationsNeverOverlap is the test sqlmock cannot write:
@@ -137,6 +156,15 @@ func TestMySQLMissingSegmentRowIsDistinctError(t *testing.T) {
 func startRedis(t *testing.T) *rdb.Client {
 	t.Helper()
 	ctx := context.Background()
+
+	if addr := os.Getenv("GCOSID_TEST_REDIS_ADDR"); addr != "" {
+		client := rdb.NewClient(&rdb.Options{Addr: addr})
+		t.Cleanup(func() { _ = client.Close() })
+		if err := client.FlushDB(ctx).Err(); err != nil {
+			t.Fatalf("flush provided redis: %v", err)
+		}
+		return client
+	}
 
 	container, err := rediscontainer.Run(ctx, redisImage())
 	if err != nil {
@@ -222,6 +250,53 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 	}
 	if c.MachineID != b.MachineID {
 		t.Fatalf("reverted slot %d not reused, got %d", b.MachineID, c.MachineID)
+	}
+}
+
+// A broken connection must be retryable: it is an outage, not a configuration
+// error. sqlmock used to assert this; a closed port does it for real.
+func TestMySQLConnectionFailureIsRetryable(t *testing.T) {
+	db, err := sql.Open("mysql", "test:test@tcp(127.0.0.1:1)/cosid?timeout=1s")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	alloc, _ := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("xdmp"))
+	if _, err := alloc.NextMaxId(context.Background(), "itest", 10); !errors.Is(err, gcosid.ErrAllocatorUnavailable) {
+		t.Fatalf("err = %v, want ErrAllocatorUnavailable", err)
+	}
+}
+
+// Exhausting the machine space must fail instead of reusing a live slot.
+func TestRedisMachineExhaustion(t *testing.T) {
+	adapter := redisAdapter{client: startRedis(t)}
+	ctx := context.Background()
+
+	// The CosID adder starts at -1, so maxMachineID=1 allows ids 0 and 1; the
+	// third instance must be refused.
+	for _, instance := range []string{"node-a", "node-b"} {
+		storage, _ := gredis.NewMachineStorage(adapter, "exhaust")
+		if _, err := storage.Allocate(ctx, "exhaust", instance, 1); err != nil {
+			t.Fatalf("allocate %s: %v", instance, err)
+		}
+	}
+
+	third, _ := gredis.NewMachineStorage(adapter, "exhaust")
+	if _, err := third.Allocate(ctx, "exhaust", "node-c", 1); !errors.Is(err, gcosid.ErrExhausted) {
+		t.Fatalf("err = %v, want ErrExhausted", err)
+	}
+}
+
+// Guarding a slot that was never allocated is a configuration error, not a
+// transient failure.
+func TestRedisMachineGuardRequiresASlot(t *testing.T) {
+	adapter := redisAdapter{client: startRedis(t)}
+
+	storage, _ := gredis.NewMachineStorage(adapter, "guard")
+	err := storage.Update(context.Background(), "guard", gcosid.MachineState{MachineID: 1, InstanceID: "node-x"})
+	if !errors.Is(err, gcosid.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 }
 

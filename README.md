@@ -29,6 +29,34 @@ Rule that will not change: uniqueness is only promised inside a configured
 allocation domain. Gaps, restart waste and clock-regression errors are allowed —
 "looks continuous" is never a reason to weaken uniqueness.
 
+## Testing
+
+| Command | Covers | Requires |
+|---|---|---|
+| `go test ./...` | pure logic: segment arithmetic, snowflake layout, converters, dialect SQL | nothing |
+| `go test -tags=integration ./...` | storage behaviour against real MySQL and Redis | Docker, or a provided environment |
+
+**Rule**: anything that depends on a database or another middleware is verified
+by the integration suite. Unit tests never mock SQL — a mock happily accepts a
+statement that duplicates ids in reality (that is exactly how a missing
+transaction boundary slipped through once).
+
+Without Docker, point the tests at a provided environment:
+
+```bash
+GCOSID_TEST_MYSQL_DSN='test:test@tcp(127.0.0.1:3306)/cosid' \
+GCOSID_TEST_REDIS_ADDR=127.0.0.1:6379 \
+go test -tags=integration ./...
+```
+
+Images default to `mysql:8.4.7` and `redis:7` and can be mirrored:
+
+```bash
+GCOSID_MYSQL_IMAGE=registry.example.com/library/mysql:8.4.7 \
+GCOSID_REDIS_IMAGE=registry.example.com/library/redis:7 \
+go test -tags=integration ./...
+```
+
 ## Install
 
 ```bash
