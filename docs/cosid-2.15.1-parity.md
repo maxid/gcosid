@@ -1,17 +1,17 @@
 # CosID 2.15.1 parity notes
 
-Target: **CosID 2.15.1** (`Ahoo-Wang/CosID` tag `v2.15.1`), the version the Java
+Target: **CosID 2.15.1** (`Ahoo-Wang/CosID` tag `v2.15.1`), the version the CosID
 platform runs. Everything below is read from that tag, not from memory or the
 upstream docs of a different major version.
 
 > Why the version matters: CosID 5.0 is a full rewrite that explicitly keeps no
 > backward compatibility (different storage layout, `RangeStore`, lease-based
-> machine slots). Porting 5.x semantics would produce ids the Java side cannot
+> machine slots). Porting 5.x semantics would produce ids the CosID side cannot
 > continue, so 2.15.1 is the only useful baseline here.
 
 ## Segment storage
 
-The Java implementation does **not** use an `id_segment(max_id, step, version)`
+The reference implementation does **not** use an `id_segment(max_id, step, version)`
 row with optimistic locking. It keeps one counter row per namespace:
 
 ```sql
@@ -45,7 +45,7 @@ Consequences for this library:
 
 ## Segment semantics
 
-`IdSegment` (from `cosid-core/.../segment/IdSegment.java`):
+`IdSegment` (from `cosid-core/.../segment/IdSegment`):
 
 | Field | Meaning |
 |---|---|
@@ -66,12 +66,12 @@ otherwise).
 
 - Epoch `CosId.COSID_EPOCH = 1577203200000` (milliseconds; seconds variant uses
   `1577203200`).
-- Layout is `timestampBits | machineBits | sequenceBits`; the JavaScript-safe
+- Layout is `timestampBits | machineBits | sequenceBits`; the JS-safe
   variant limits the sum of the bits so the value stays below
-  `JAVA_SCRIPT_MAX_SAFE_NUMBER_BIT`.
+  `JS_MAX_SAFE_NUMBER_BIT`.
 - `MillisecondSnowflakeId` / `SecondSnowflakeId` differ only in the time unit;
   `ClockSyncSnowflakeId` wraps a generator with `ClockBackwardsSynchronizer`
-  instead of throwing; `SafeJavaScriptSnowflakeId` narrows the layout.
+  instead of throwing; `SafeJSSnowflakeId` narrows the layout.
 - `SnowflakeFriendlyId` renders `{timestamp}-{machine}-{sequence}` style strings
   via `SnowflakeIdStateParser`, which is a *rendering*, not part of the id.
 

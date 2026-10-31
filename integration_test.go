@@ -89,7 +89,7 @@ func seedMySQL(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := db.ExecContext(ctx,
-		`INSERT INTO cosid (name, last_max_id, last_fetch_time) VALUES ('xdmp.itest', 0, unix_timestamp())
+		`INSERT INTO cosid (name, last_max_id, last_fetch_time) VALUES ('app.itest', 0, unix_timestamp())
 		 ON DUPLICATE KEY UPDATE last_max_id = 0`); err != nil {
 		t.Fatalf("seed cosid row: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestMySQLSegmentReservationsNeverOverlap(t *testing.T) {
 	db := startMySQL(t)
 	ctx := context.Background()
 
-	alloc, err := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("xdmp"))
+	alloc, err := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("app"))
 	if err != nil {
 		t.Fatalf("allocator: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestMySQLSegmentReservationsNeverOverlap(t *testing.T) {
 func TestMySQLMissingSegmentRowIsDistinctError(t *testing.T) {
 	db := startMySQL(t)
 
-	alloc, _ := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("xdmp"))
+	alloc, _ := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("app"))
 	if _, err := alloc.NextMaxId(context.Background(), "unknown", 10); !errors.Is(err, database.ErrSegmentMissing) {
 		t.Fatalf("err = %v, want ErrSegmentMissing", err)
 	}
@@ -198,7 +198,7 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 	adapter := redisAdapter{client: client}
 	ctx := context.Background()
 
-	alloc, err := gredis.NewSegmentAllocator(adapter, "xdmp")
+	alloc, err := gredis.NewSegmentAllocator(adapter, "app")
 	if err != nil {
 		t.Fatalf("allocator: %v", err)
 	}
@@ -214,18 +214,18 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 		t.Fatalf("max ids = %d, %d, want 10, 20", first, second)
 	}
 	// The key must be the CosID one, hash tag included.
-	if got := client.Get(ctx, "cosid:{xdmp.order}:adder").Val(); got != "20" {
-		t.Fatalf("cosid:{xdmp.order}:adder = %q, want 20", got)
+	if got := client.Get(ctx, "cosid:{app.order}:adder").Val(); got != "20" {
+		t.Fatalf("cosid:{app.order}:adder = %q, want 20", got)
 	}
 
-	storageA, _ := gredis.NewMachineStorage(adapter, "xdmp")
-	storageB, _ := gredis.NewMachineStorage(adapter, "xdmp")
+	storageA, _ := gredis.NewMachineStorage(adapter, "app")
+	storageB, _ := gredis.NewMachineStorage(adapter, "app")
 
-	a, err := storageA.Allocate(ctx, "xdmp", "node-a", 10)
+	a, err := storageA.Allocate(ctx, "app", "node-a", 10)
 	if err != nil {
 		t.Fatalf("allocate a: %v", err)
 	}
-	b, err := storageB.Allocate(ctx, "xdmp", "node-b", 10)
+	b, err := storageB.Allocate(ctx, "app", "node-b", 10)
 	if err != nil {
 		t.Fatalf("allocate b: %v", err)
 	}
@@ -234,17 +234,17 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 	}
 
 	// Re-allocating for a known instance returns its slot.
-	again, err := storageA.Allocate(ctx, "xdmp", "node-a", 10)
+	again, err := storageA.Allocate(ctx, "app", "node-a", 10)
 	if err != nil || again.MachineID != a.MachineID {
 		t.Fatalf("re-allocate = %+v, %v", again, err)
 	}
 
 	// Revert puts the slot back for reuse.
-	if err := storageB.Revert(ctx, "xdmp", "node-b"); err != nil {
+	if err := storageB.Revert(ctx, "app", "node-b"); err != nil {
 		t.Fatalf("revert: %v", err)
 	}
-	storageC, _ := gredis.NewMachineStorage(adapter, "xdmp")
-	c, err := storageC.Allocate(ctx, "xdmp", "node-c", 10)
+	storageC, _ := gredis.NewMachineStorage(adapter, "app")
+	c, err := storageC.Allocate(ctx, "app", "node-c", 10)
 	if err != nil {
 		t.Fatalf("allocate c: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestMySQLConnectionFailureIsRetryable(t *testing.T) {
 	}
 	defer db.Close()
 
-	alloc, _ := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("xdmp"))
+	alloc, _ := database.NewAllocator(db, database.MySQL{}, database.WithNamespace("app"))
 	if _, err := alloc.NextMaxId(context.Background(), "itest", 10); !errors.Is(err, gcosid.ErrAllocatorUnavailable) {
 		t.Fatalf("err = %v, want ErrAllocatorUnavailable", err)
 	}

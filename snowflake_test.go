@@ -44,12 +44,12 @@ func TestLayoutBounds(t *testing.T) {
 	}
 }
 
-func TestSafeJavaScriptLayoutsStaySmall(t *testing.T) {
+func TestSafeJSLayoutsStaySmall(t *testing.T) {
 	for name, l := range map[string]Layout{
-		"millisecond": SafeJavaScriptMillisecondLayout,
-		"second":      SafeJavaScriptSecondLayout,
+		"millisecond": SafeJSMillisecondLayout,
+		"second":      SafeJSSecondLayout,
 	} {
-		if !l.IsSafeJavaScript() {
+		if !l.IsSafeJS() {
 			t.Errorf("%s layout is not JS-safe", name)
 		}
 		epoch := l.Epoch
@@ -60,7 +60,7 @@ func TestSafeJavaScriptLayoutsStaySmall(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s compose: %v", name, err)
 		}
-		if id > JavaScriptMaxSafeNumber {
+		if id > JSMaxSafeNumber {
 			t.Errorf("%s id %d exceeds the JS safe number", name, id)
 		}
 	}

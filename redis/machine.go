@@ -11,7 +11,7 @@ import (
 // The scripts below are CosID 2.15.1's machine_id_distribute / _guard / _revert
 // verbatim. They keep the same keys (`cosid:<namespace>:itc_idx`, `:adder`,
 // `:revert`) and the same value format (`<machineId>|<lastStamp>`), so a Go
-// process and a Java process share one slot table.
+// process and a CosID process share one slot table.
 const distributeScript = `
 local stateDelimiter = "|";
 local keyPrefix = 'cosid' .. ':';

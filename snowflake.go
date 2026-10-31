@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// CosID 2.15.1 constants (CosId.java, SnowflakeId implementations).
+// CosID 2.15.1 constants (the CosId class, SnowflakeId implementations).
 const (
 	// CosIdEpoch is CosId.COSID_EPOCH in milliseconds (2019-12-24T16:00Z).
 	CosIdEpoch = int64(1577203200000)
@@ -15,10 +15,10 @@ const (
 	CosIdEpochSecond = int64(1577203200)
 	// TotalBit is the usable bit count: the sign bit stays zero.
 	TotalBit = 63
-	// JavaScriptMaxSafeNumberBit is SafeJavaScriptSnowflakeId.JAVA_SCRIPT_MAX_SAFE_NUMBER_BIT.
-	JavaScriptMaxSafeNumberBit = 53
-	// JavaScriptMaxSafeNumber is SafeJavaScriptSnowflakeId.JAVA_SCRIPT_MAX_SAFE_NUMBER.
-	JavaScriptMaxSafeNumber = int64(9007199254740991)
+	// JSMaxSafeNumberBit is SafeJSSnowflakeId.JS_MAX_SAFE_NUMBER_BIT.
+	JSMaxSafeNumberBit = 53
+	// JSMaxSafeNumber is SafeJSSnowflakeId.JS_MAX_SAFE_NUMBER.
+	JSMaxSafeNumber = int64(9007199254740991)
 )
 
 // Layout is one snowflake bit layout: timestamp | machine | sequence.
@@ -45,16 +45,16 @@ var SecondLayout = Layout{
 	SequenceBits:  22,
 }
 
-// SafeJavaScript variants drop machine and sequence bits so the id stays a
-// JavaScript safe integer: milliseconds 41 | 3 | 9, seconds 31 | 3 | 19.
+// SafeJS variants drop machine and sequence bits so the id stays a JS safe
+// integer: milliseconds 41 | 3 | 9, seconds 31 | 3 | 19.
 var (
-	SafeJavaScriptMillisecondLayout = Layout{
+	SafeJSMillisecondLayout = Layout{
 		Epoch:         CosIdEpoch,
 		TimestampBits: 41,
 		MachineBits:   3,
 		SequenceBits:  9,
 	}
-	SafeJavaScriptSecondLayout = Layout{
+	SafeJSSecondLayout = Layout{
 		Epoch:         CosIdEpochSecond,
 		TimestampBits: 31,
 		MachineBits:   3,
@@ -117,10 +117,10 @@ func (l Layout) Parse(id int64) State {
 	return State{Timestamp: diff + l.Epoch, MachineID: machine, Sequence: sequence}
 }
 
-// IsSafeJavaScript reports whether ids produced by the layout stay below the
-// JavaScript safe integer limit.
-func (l Layout) IsSafeJavaScript() bool {
-	return l.TimestampBits+l.MachineBits+l.SequenceBits <= JavaScriptMaxSafeNumberBit
+// IsSafeJS reports whether ids produced by the layout stay below the JS safe
+// integer limit.
+func (l Layout) IsSafeJS() bool {
+	return l.TimestampBits+l.MachineBits+l.SequenceBits <= JSMaxSafeNumberBit
 }
 
 func mask(bits int) int64 {

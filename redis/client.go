@@ -1,7 +1,7 @@
 // Package redis implements CosID's Redis storage protocol.
 //
 // The key layout and the machine Lua scripts are copied from CosID 2.15.1
-// (cosid-spring-redis), because a deployment that runs Java and Go side by side
+// (cosid-spring-redis), because a deployment that runs CosID and Go side by side
 // must see the same counters and the same leased slots. Changing a key name here
 // silently splits the allocation domain in two.
 package redis

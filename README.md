@@ -1,3 +1,5 @@
+English | [简体中文](README.zh-CN.md)
+
 # gcosid
 
 Segment and snowflake ID generation in Go.

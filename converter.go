@@ -101,7 +101,7 @@ func (s Suffix) Format(id int64) string {
 }
 
 // DatePrefix renders `<date><delimiter><id>` with a Go time layout. CosID uses a
-// java.time pattern; the caller translates it.
+// date-pattern string instead of a Go layout; the caller translates it.
 type DatePrefix struct {
 	Layout    string
 	Delimiter string
