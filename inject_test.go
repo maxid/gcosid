@@ -201,3 +201,28 @@ func TestInjectorFromProvider(t *testing.T) {
 		t.Fatalf("id = %d, want 1 from the replaced generator", next.ID)
 	}
 }
+
+// `cosid:""` means "the shared generator", mirroring `@CosId` without a value.
+func TestInjectorFallsBackToTheSharedGenerator(t *testing.T) {
+	type row struct {
+		ID int64 `cosid:""`
+	}
+
+	provider := NewProvider()
+	provider.SetShare(NewAtomicGenerator())
+	injector := NewInjectorFromProvider(provider)
+
+	entity := &row{}
+	if _, err := injector.Ensure(context.Background(), entity); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if entity.ID != 1 {
+		t.Fatalf("id = %d, want 1 from the shared generator", entity.ID)
+	}
+
+	// Without a share generator the same entity is a configuration error.
+	bare := NewInjectorFromProvider(NewProvider())
+	if _, err := bare.Ensure(context.Background(), &row{}); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("err = %v, want ErrInvalidConfig", err)
+	}
+}

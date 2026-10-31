@@ -7,8 +7,9 @@ import (
 	"sync"
 )
 
-// ShareName is CosID's IdGeneratorProvider.SHARE: the unnamed generator used when
-// a caller does not ask for a specific one.
+// ShareName is CosID's IdGeneratorProvider.SHARE: the generator used when a
+// caller does not name one. `@CosId` without a value resolves to it, and every
+// registry operation treats it like any other name.
 const ShareName = "__share__"
 
 // Provider is CosID's IdGeneratorProvider: a registry of named generators.
@@ -30,11 +31,13 @@ func (p *Provider) Share() Generator {
 	return p.share
 }
 
-// SetShare installs the shared generator.
+// SetShare installs the shared generator. As in CosID, the shared generator is
+// also reachable by name, so Get(ShareName) works.
 func (p *Provider) SetShare(gen Generator) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.share = gen
+	p.generators[ShareName] = gen
 }
 
 // RemoveShare clears the shared generator and returns it.
@@ -43,6 +46,7 @@ func (p *Provider) RemoveShare() Generator {
 	defer p.mu.Unlock()
 	gen := p.share
 	p.share = nil
+	delete(p.generators, ShareName)
 	return gen
 }
 
@@ -63,8 +67,13 @@ func (p *Provider) Required(name string) (Generator, error) {
 	return nil, fmt.Errorf("%w: no id generator named %q", ErrInvalidConfig, name)
 }
 
-// Set registers a generator.
+// Set registers a generator. The share name routes to SetShare so the two views
+// never disagree.
 func (p *Provider) Set(name string, gen Generator) {
+	if name == ShareName {
+		p.SetShare(gen)
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.generators[name] = gen
@@ -72,6 +81,9 @@ func (p *Provider) Set(name string, gen Generator) {
 
 // Remove drops a generator and returns it.
 func (p *Provider) Remove(name string) Generator {
+	if name == ShareName {
+		return p.RemoveShare()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	gen := p.generators[name]
@@ -85,6 +97,26 @@ func (p *Provider) Clear() {
 	defer p.mu.Unlock()
 	p.share = nil
 	p.generators = map[string]Generator{}
+}
+
+// ShareRequired returns the shared generator or an error naming it. It is what an
+// unnamed id field resolves to.
+func (p *Provider) ShareRequired() (Generator, error) {
+	if gen := p.Share(); gen != nil {
+		return gen, nil
+	}
+	return nil, fmt.Errorf("%w: no shared id generator is registered", ErrInvalidConfig)
+}
+
+// All returns every registered generator, including the shared one.
+func (p *Provider) All() []Generator {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]Generator, 0, len(p.generators))
+	for _, gen := range p.generators {
+		out = append(out, gen)
+	}
+	return out
 }
 
 // Names lists the registered generator names in a stable order.

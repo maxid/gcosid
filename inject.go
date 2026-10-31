@@ -16,8 +16,9 @@ import (
 //	}
 //
 // The tag value is the generator name in the Injector's registry. `cosid:"-"`
-// opts a field out. String fields accept a StringGenerator; numeric fields
-// accept a Generator.
+// opts a field out, and an empty value (`cosid:""`) means the shared generator,
+// which is what CosID's `@CosId` without a value does. String fields accept a
+// StringGenerator; numeric fields accept a Generator.
 const TagKey = "cosid"
 
 // Injector fills id fields of structs from registered generators. CosID reaches
@@ -126,17 +127,22 @@ func (i *Injector) EnsureAll(ctx context.Context, entities any) (int, error) {
 
 // fieldGenerators returns the registries for one fill.
 func (i *Injector) lookup(name string) (Generator, StringGenerator, error) {
+	if name == "" {
+		name = ShareName
+	}
+
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 
 	if i.provider != nil {
-		if gen, ok := i.provider.Get(name); ok {
-			if sg, isString := gen.(StringGenerator); isString {
-				return gen, sg, nil
-			}
-			return gen, nil, nil
+		gen, ok := i.provider.Get(name)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: no id generator named %q", ErrInvalidConfig, name)
 		}
-		return nil, nil, fmt.Errorf("%w: no id generator named %q", ErrInvalidConfig, name)
+		if sg, isString := gen.(StringGenerator); isString {
+			return gen, sg, nil
+		}
+		return gen, nil, nil
 	}
 
 	gen, hasGen := i.generators[name]
@@ -264,7 +270,9 @@ func collectPlans(structType reflect.Type, prefix []int) ([]fieldPlan, error) {
 		}
 
 		tag, ok := field.Tag.Lookup(TagKey)
-		if !ok || tag == "-" || tag == "" {
+		// `cosid:"-"` opts out; an empty tag means the shared generator, like
+		// `@CosId` with no value in CosID.
+		if !ok || tag == "-" {
 			continue
 		}
 		if !availableIDKind(field.Type.Kind()) {

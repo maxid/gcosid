@@ -19,6 +19,12 @@ type Order struct {
 	Amount int64
 }
 
+// Shared is an entity whose id field takes the shared generator: `cosid:""` is
+// the Go spelling of `@CosId` with no value.
+type Shared struct {
+	ID int64 `cosid:""`
+}
+
 // OrderNo is a second entity using the same generator as a string field.
 type OrderNo struct {
 	No      string `cosid:"orderNo"`
@@ -77,7 +83,16 @@ func main() {
 	}
 	fmt.Printf("order no = %q\n", no.No)
 
-	// 6. Diagnostics: the same entity-level view an operator dashboard reads.
+	// 6. The shared generator: one registry entry every unnamed id field uses.
+	provider := gcosid.NewProvider()
+	provider.SetShare(chain)
+	shared := &Shared{}
+	if _, err := gcosid.NewInjectorFromProvider(provider).Ensure(ctx, shared); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("shared id = %d\n", shared.ID)
+
+	// 7. Diagnostics: the same entity-level view an operator dashboard reads.
 	fmt.Println("chain stat:", chain.Stat().String())
 	fmt.Println("database allocator is swappable:", fmt.Sprintf("%T", (*database.Allocator)(nil)))
 }

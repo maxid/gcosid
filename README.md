@@ -90,6 +90,23 @@ filled, err := injector.Ensure(ctx, &order) // fills only when the id is empty
 injector.EnsureAll(ctx, []*Order{{}, {}})   // batch
 ```
 
+### The shared generator
+
+One generator can serve every unnamed id field — CosID's `__share__` slot:
+
+```go
+provider := gcosid.NewProvider()
+provider.SetShare(chain)
+
+type Audited struct {
+    ID int64 `cosid:""`   // empty tag = the shared generator
+}
+injector := gcosid.NewInjectorFromProvider(provider)
+```
+
+As in `DefaultIdGeneratorProvider`, `Set`/`Remove`/`Get` with the name
+`"__share__"` operate on that same slot, so the two views never diverge.
+
 See [`examples/inject`](examples/inject/main.go) for a runnable program.
 
 Rules, matching `CosIdAccessor`:

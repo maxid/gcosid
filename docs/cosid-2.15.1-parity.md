@@ -158,6 +158,19 @@ numeric generator renders through `ToStringIdConverter`. `accessor/`,
 `annotation/` and their Spring/MyBatis/Jackson wiring have no Go counterpart; the
 tag-based injector replaces them.
 
+### The share slot
+
+`IdGeneratorProvider.SHARE` (`"__share__"`) is a generator reachable both as
+"the shared one" and by name:
+
+- `setShare(gen)` **also** stores it in the name map, so `get(SHARE)` works;
+- `set(SHARE, gen)` and `remove(SHARE)` route to the share slot;
+- `clear()` drops both views;
+- `@CosId` with no value resolves to `SHARE`, and so does a bare `cosid:""` tag.
+
+The Go `Provider` keeps the same routing, which is why `Names()` includes the
+share entry just like CosID's `entries()`.
+
 ## Benchmark method
 
 The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).
