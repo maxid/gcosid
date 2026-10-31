@@ -23,3 +23,17 @@ jobs:
         run: go test ./...
       - name: Vet
         run: go vet ./...
+
+  # Storage behaviour is only real against a real database and a real Redis.
+  # The runner provides Docker, so testcontainers starts them here; the unit
+  # matrix above stays hermetic and fast.
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Integration tests (MySQL + Redis)
+        run: go test -tags=integration ./... -count=1 -timeout 15m
