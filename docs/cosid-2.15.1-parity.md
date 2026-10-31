@@ -137,6 +137,27 @@ random low bits (`originalId << bits | random(0, 2^bits)`), throwing
 `63 - uncertaintyBits`. Ordering survives at the original granularity; the
 trailing digits stop advertising the issue count.
 
+## Id injection
+
+CosID reaches entity fields through `@CosId` + `CosIdScanner` + `CosIdAccessor`
+(reflection on annotated classes), and `EnsureId` fills the field only when it is
+null/empty/0. `availableType` accepts `String`, `Long`/`long`, `Integer`/`int`.
+
+Go has no annotations, so the port uses struct tags and `reflect`:
+
+```go
+type Order struct { ID int64 `cosid:"order"` }
+injector.Register("order", chain)
+injector.Ensure(ctx, &order)
+```
+
+The observable rules are the same: tag names the generator, only id-capable field
+types are accepted, an existing id is never overwritten, embedded structs are
+searched (CosID's `CompositeFieldDefinitionParser`), and a string field fed by a
+numeric generator renders through `ToStringIdConverter`. `accessor/`,
+`annotation/` and their Spring/MyBatis/Jackson wiring have no Go counterpart; the
+tag-based injector replaces them.
+
 ## Benchmark method
 
 The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).

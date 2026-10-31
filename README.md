@@ -36,6 +36,7 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Sharding: `ModCycle`, `IntervalTimeline` (time windows), `CachedSharding` | done |
 | Diagnostics: `Statistical` stats for generators and converters | done |
 | `UncertaintyIdGenerator`: random low bits on top of an ordered id | done |
+| Struct-tag id injection (`@CosId` + `EnsureId` equivalent) | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured
@@ -69,6 +70,36 @@ GCOSID_MYSQL_IMAGE=registry.example.com/library/mysql:8.4.7 \
 GCOSID_REDIS_IMAGE=registry.example.com/library/redis:7 \
 go test -tags=integration ./...
 ```
+
+## Id injection
+
+CosID annotates entity fields with `@CosId` and fills them through an accessor.
+Go has no annotations, so the equivalent is a struct tag:
+
+```go
+type Order struct {
+    ID     int64 `cosid:"order"`
+    Amount int64
+}
+
+injector := gcosid.NewInjector()
+injector.Register("order", chain)          // numeric field
+injector.RegisterString("no", orderNoGen)  // string field
+
+filled, err := injector.Ensure(ctx, &order) // fills only when the id is empty
+injector.EnsureAll(ctx, []*Order{{}, {}})   // batch
+```
+
+See [`examples/inject`](examples/inject/main.go) for a runnable program.
+
+Rules, matching `CosIdAccessor`:
+
+- the tag value is a generator name; `cosid:"-"` opts out;
+- only `string` and the integer widths hold ids (`Long`/`Integer`/`String` in CosID);
+- an entity that already carries an id is never overwritten (`EnsureId`);
+- embedded structs are searched, so a composite entity can inherit its id;
+- a string field fed by a numeric generator is rendered as decimal
+  (`ToStringIdConverter`).
 
 ## Install
 
