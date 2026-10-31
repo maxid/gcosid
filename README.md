@@ -33,6 +33,7 @@ Consumers pick a generator; the library never mixes layouts silently.
 | CosID string family (`Radix36/62CosIdGenerator`, 44/20/16 layout) | done |
 | Generator registry (`IdGeneratorProvider`) and `LazyIdGenerator` | done |
 | Grouped segments: per-year / month / day counters and `<group>-<id>` rendering | done |
+| Sharding: `ModCycle`, `IntervalTimeline` (time windows), `CachedSharding` | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured

@@ -105,6 +105,24 @@ One difference in the Go port: CosID reads the current key from a `ThreadLocal`
 (`GroupedAccessor`), while this library returns the key next to the id. Ambient
 state would make concurrent callers silently pick up each other's group.
 
+## Sharding
+
+`sharding/` decides which logical node (storage shard) an id belongs to:
+
+| class | node name | use |
+|---|---|---|
+| `ModCycle` | `prefix + (value % divisor)` | even spread over N shards |
+| `IntervalTimeline` | `prefix + formatted window start` | one shard per time window (month, day, …) |
+| `CachedSharding` | delegates, memoises range lookups | hot range queries |
+
+`IntervalStep` floors the effective interval bounds to the unit
+(`floorUnit`), steps by `amount`, and `offsetUnit` counts whole units between the
+timeline start and a value (`start.until(time, unit) / amount`).
+
+`IntervalTimeline.sharding(value)` **rejects** values outside the effective
+interval (`Preconditions.checkArgument(contains(...))`). The Go port keeps that:
+silently clamping would write ids into the wrong shard.
+
 ## Benchmark method
 
 The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).
