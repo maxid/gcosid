@@ -87,11 +87,20 @@ otherwise).
 
 ## Benchmark method
 
-The tag compiles for **JDK 17** (`build.gradle.kts`, `JavaLanguageVersion.of(17)`).
+The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).
 Rather than running a JDK container, the golden expectations are read directly
 out of the 2.15.1 sources and pinned as literals in the Go tests, each with the
 file it came from. That keeps the check offline and reproducible; a JDK container
 is only needed if a future version's behaviour cannot be read off the source.
+
+## Segment defaults
+
+- `IdSegmentDistributor.DEFAULT_STEP = 10`, `DEFAULT_OFFSET = 0` — the segment
+  step is 10 unless configured, not 100.
+- `SegmentChainId.DEFAULT_SAFE_DISTANCE = 2`: the chain keeps **two segments**
+  ready ahead of the cursor, prefetched by a `PrefetchJob` on a worker executor.
+  A single buffered range (this library's current model) is not the same thing:
+  the chain tolerates one slow/failed reservation without stalling.
 
 ## Machines
 
@@ -99,6 +108,20 @@ is only needed if a future version's behaviour cannot be read off the source.
 (fixed), JDBC and Redis stores (leased, with `MachineState`), and a Kubernetes
 StatefulSet variant. `MachineIdGuarder` keeps the lease alive; losing it raises
 `MachineIdLostException`.
+
+Two details that decide whether Go and Java can share the tables:
+
+1. **Slot name is padded**: `namespacedMachineId(namespace, machineId)` returns
+   `namespace + "." + padStart(machineId, 8, '0')`, e.g. `xdmp.00000001`. `name`
+   is the primary key of `cosid_machine`, so an unpadded name addresses a
+   different row and two runtimes would both see a free slot for the same
+   machine id.
+2. **`getSafeGuardAt(duration, stable)`**: `stable = true` or a "forever" guard
+   yields `0`, which makes the reclaim condition `last_timestamp <= 0` — i.e. no
+   slot is ever reclaimed by age. A stable instance (StatefulSet pod) only loses
+   its slot when it is explicitly reverted.
+3. On a duplicate-key insert the JDBC distributor **re-reads and retries**
+   (`distributeMachine` recurses) instead of failing the allocation.
 
 ## Converters (`cosid-core/.../converter`)
 

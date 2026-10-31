@@ -315,3 +315,83 @@ func redisImage() string {
 	}
 	return "redis:7"
 }
+
+// The machine slot name is CosID's namespacedMachineId: namespace + "." + an
+// 8-digit zero-padded id. Two runtimes sharing the table must address the same
+// row, otherwise each sees a free slot and both take the same machine id.
+func TestMySQLMachineSlotNameIsPadded(t *testing.T) {
+	db := startMySQL(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS cosid_machine`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE cosid_machine (
+		name VARCHAR(100) NOT NULL,
+		namespace VARCHAR(100) NOT NULL,
+		machine_id INT UNSIGNED NOT NULL DEFAULT 0,
+		last_timestamp BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		instance_id VARCHAR(100) NOT NULL DEFAULT '',
+		distribute_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		revert_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		PRIMARY KEY (name)
+	) ENGINE = InnoDB`); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	storage, err := database.NewMachineStorage(db, "xdmp")
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	state, err := storage.Allocate(ctx, "xdmp", "node-a", 10)
+	if err != nil {
+		t.Fatalf("allocate: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM cosid_machine WHERE machine_id = ?`, state.MachineID).Scan(&name); err != nil {
+		t.Fatalf("select name: %v", err)
+	}
+	want := fmt.Sprintf("xdmp.%08d", state.MachineID)
+	if name != want {
+		t.Fatalf("slot name = %q, want %q", name, want)
+	}
+}
+
+// A second storage instance (another process) must see the first one's slot and
+// allocate a different machine id.
+func TestMySQLMachineSlotsAreExclusiveAcrossInstances(t *testing.T) {
+	db := startMySQL(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS cosid_machine`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE cosid_machine (
+		name VARCHAR(100) NOT NULL,
+		namespace VARCHAR(100) NOT NULL,
+		machine_id INT UNSIGNED NOT NULL DEFAULT 0,
+		last_timestamp BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		instance_id VARCHAR(100) NOT NULL DEFAULT '',
+		distribute_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		revert_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		PRIMARY KEY (name)
+	) ENGINE = InnoDB`); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+
+	first, _ := database.NewMachineStorage(db, "xdmp")
+	second, _ := database.NewMachineStorage(db, "xdmp")
+
+	a, err := first.Allocate(ctx, "xdmp", "node-a", 10)
+	if err != nil {
+		t.Fatalf("allocate a: %v", err)
+	}
+	b, err := second.Allocate(ctx, "xdmp", "node-b", 10)
+	if err != nil {
+		t.Fatalf("allocate b: %v", err)
+	}
+	if a.MachineID == b.MachineID {
+		t.Fatalf("two instances share machine id %d", a.MachineID)
+	}
+}

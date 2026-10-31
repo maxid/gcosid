@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/maxid/gcosid"
@@ -26,7 +27,9 @@ type MachineStorage struct {
 	// safeGuard is how long after an instance's last heartbeat its slot is
 	// considered reclaimable.
 	safeGuard time.Duration
-	now       func() int64
+	// stable disables reclaiming entirely, like an InstanceId with stable=true.
+	stable bool
+	now    func() int64
 }
 
 // MachineStorageOption configures MachineStorage.
@@ -39,6 +42,13 @@ func WithMachineSafeGuard(d time.Duration) MachineStorageOption {
 			m.safeGuard = d
 		}
 	}
+}
+
+// WithMachineStable marks this instance as stable (for example a StatefulSet
+// pod). CosID then never reclaims slots by heartbeat age: safeGuardAt is 0, so
+// only an explicitly released slot can be reused.
+func WithMachineStable(stable bool) MachineStorageOption {
+	return func(m *MachineStorage) { m.stable = stable }
 }
 
 // WithMachineClock overrides the timestamp source (tests).
@@ -80,7 +90,7 @@ func (m *MachineStorage) Allocate(ctx context.Context, namespace, instanceID str
 	}
 
 	now := m.now()
-	safeGuardAt := now - m.safeGuard.Milliseconds()
+	safeGuardAt := m.safeGuardAt(now)
 
 	// Claim a released slot: empty owner or stale heartbeat.
 	machineID, lastTimestamp, ok, err := m.claimReleased(ctx, namespace, instanceID, now, safeGuardAt)
@@ -141,6 +151,19 @@ func (m *MachineStorage) claimReleased(ctx context.Context, namespace, instanceI
 	return machineID, now, true, nil
 }
 
+// safeGuardAt mirrors MachineIdDistributor.getSafeGuardAt: a stable instance,
+// or a "forever" guard, yields 0 so no slot is ever considered stale.
+func (m *MachineStorage) safeGuardAt(now int64) int64 {
+	if m.stable || m.safeGuard <= 0 {
+		return 0
+	}
+	at := now - m.safeGuard.Milliseconds()
+	if at < 0 {
+		return 0
+	}
+	return at
+}
+
 func (m *MachineStorage) nextMachineID(ctx context.Context, namespace string) (int64, error) {
 	var next sql.NullInt64
 	if err := m.db.QueryRowContext(ctx,
@@ -179,6 +202,10 @@ func (m *MachineStorage) Get(ctx context.Context, namespace, instanceID string) 
 	return gcosid.MachineState{MachineID: machineID, LastTimestamp: lastTimestamp, InstanceID: instanceID}, true, nil
 }
 
+// key is CosID's namespacedMachineId: the machine id is zero-padded to 8 digits.
+// The padded form is the primary key of cosid_machine, so an unpadded name would
+// address a different row — two runtimes sharing the database would then hand
+// out the same machine id.
 func (m *MachineStorage) key(namespace string, machineID int64) string {
-	return namespace + "." + strconv.FormatInt(machineID, 10)
+	return namespace + "." + strings.Repeat("0", max(0, 8-len(strconv.FormatInt(machineID, 10)))) + strconv.FormatInt(machineID, 10)
 }
