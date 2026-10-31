@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maxid/gcosid"
 )
@@ -67,27 +68,28 @@ func TestSegmentErrorsAreRetryable(t *testing.T) {
 
 func TestMachineDistributeParsesTheScriptReply(t *testing.T) {
 	fake := &fakeClient{reply: []any{int64(3), int64(1000)}}
-	storage, err := NewMachineStorage(fake, "app", WithClock(func() int64 { return 2000 }))
+	// A realistic millisecond clock: CosID clamps a negative safe-guard to 0.
+	storage, err := NewMachineStorage(fake, "xdmp", WithClock(func() int64 { return 1_000_000 }))
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
 
-	state, err := storage.Allocate(context.Background(), "app", "node-a", 10)
+	state, err := storage.Distribute(context.Background(), "xdmp", "node-a", 10, time.Minute, false)
 	if err != nil {
-		t.Fatalf("allocate: %v", err)
+		t.Fatalf("distribute: %v", err)
 	}
 	if state.MachineID != 3 || state.LastTimestamp != 1000 || state.InstanceID != "node-a" {
 		t.Fatalf("state = %+v", state)
 	}
-	if fake.lastKeys[0] != "app" {
+	if fake.lastKeys[0] != "xdmp" {
 		t.Fatalf("keys = %v", fake.lastKeys)
 	}
 	args := fake.lastArgs
 	if args[0] != "node-a" || args[1] != int64(10) {
 		t.Fatalf("args = %v", args)
 	}
-	// safeGuardAt must be now - 10m.
-	if args[3] != int64(2000-600_000) {
+	// safeGuardAt is now - 1 minute, the value CosID passes as ARGV[4].
+	if args[3] != int64(1_000_000-60_000) {
 		t.Fatalf("safeGuardAt = %v", args[3])
 	}
 	if !strings.Contains(fake.lastScript, "itc_idx") {
@@ -95,44 +97,50 @@ func TestMachineDistributeParsesTheScriptReply(t *testing.T) {
 	}
 }
 
+// A stable instance passes safeGuardAt=0, so the script never recycles a slot by
+// age — CosID's getSafeGuardAt(duration, stable=true).
+func TestMachineDistributeStablePassesZeroSafeGuard(t *testing.T) {
+	fake := &fakeClient{reply: []any{int64(1), int64(5)}}
+	storage, _ := NewMachineStorage(fake, "xdmp", WithClock(func() int64 { return 2000 }))
+
+	if _, err := storage.Distribute(context.Background(), "xdmp", "node-a", 10, time.Minute, true); err != nil {
+		t.Fatalf("distribute: %v", err)
+	}
+	if fake.lastArgs[3] != int64(0) {
+		t.Fatalf("safeGuardAt = %v, want 0 for a stable instance", fake.lastArgs[3])
+	}
+}
+
 func TestMachineDistributeExhausted(t *testing.T) {
 	fake := &fakeClient{reply: []any{int64(-1), int64(-1)}}
-	storage, _ := NewMachineStorage(fake, "app")
+	storage, _ := NewMachineStorage(fake, "xdmp")
 
-	if _, err := storage.Allocate(context.Background(), "app", "node-a", 10); !errors.Is(err, gcosid.ErrExhausted) {
+	if _, err := storage.Distribute(context.Background(), "xdmp", "node-a", 10, time.Minute, false); !errors.Is(err, gcosid.ErrExhausted) {
 		t.Fatalf("err = %v, want ErrExhausted", err)
 	}
 }
 
 func TestMachineGuardRequiresASlot(t *testing.T) {
 	fake := &fakeClient{reply: int64(0)}
-	storage, _ := NewMachineStorage(fake, "app")
+	storage, _ := NewMachineStorage(fake, "xdmp")
 
-	err := storage.Update(context.Background(), "app", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"})
+	err := storage.Guard(context.Background(), "xdmp", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false)
 	if !errors.Is(err, gcosid.ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 
 	fake.reply = int64(1)
-	if err := storage.Update(context.Background(), "app", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"}); err != nil {
+	if err := storage.Guard(context.Background(), "xdmp", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false); err != nil {
 		t.Fatalf("guard: %v", err)
-	}
-}
-
-func TestMachineGetMissing(t *testing.T) {
-	fake := &fakeClient{reply: nil}
-	storage, _ := NewMachineStorage(fake, "app")
-
-	if _, ok, err := storage.Get(context.Background(), "app", "node-z"); ok || err != nil {
-		t.Fatalf("ok = %v, err = %v", ok, err)
 	}
 }
 
 func TestMachineRevertUsesTheScript(t *testing.T) {
 	fake := &fakeClient{reply: int64(1)}
-	storage, _ := NewMachineStorage(fake, "app", WithClock(func() int64 { return 42 }))
+	storage, _ := NewMachineStorage(fake, "xdmp", WithClock(func() int64 { return 42 }))
 
-	if err := storage.Revert(context.Background(), "app", "node-a"); err != nil {
+	err := storage.Revert(context.Background(), "xdmp", "node-a", gcosid.MachineState{MachineID: 1}, false)
+	if err != nil {
 		t.Fatalf("revert: %v", err)
 	}
 	if !strings.Contains(fake.lastScript, "instanceRevertKey") {

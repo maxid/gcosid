@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	rdb "github.com/redis/go-redis/v9"
@@ -35,7 +36,7 @@ func startMySQL(t *testing.T) *sql.DB {
 	// A provided environment wins over containers: CI without Docker can point
 	// these at a real MySQL.
 	if dsn := os.Getenv("GCOSID_TEST_MYSQL_DSN"); dsn != "" {
-		db, err := sql.Open("mysql", dsn)
+		db, err := database.OpenMySQL(dsn)
 		if err != nil {
 			t.Fatalf("open provided mysql: %v", err)
 		}
@@ -64,7 +65,8 @@ func startMySQL(t *testing.T) *sql.DB {
 	}
 
 	dsn := fmt.Sprintf("test:test@tcp(%s:%s)/cosid?multiStatements=true", host, port.Port())
-	db, err := sql.Open("mysql", dsn)
+	// Open through gcosid so clientFoundRows/parseTime match the Java runtime.
+	db, err := database.OpenMySQL(dsn)
 	if err != nil {
 		t.Fatalf("open mysql: %v", err)
 	}
@@ -221,11 +223,11 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 	storageA, _ := gredis.NewMachineStorage(adapter, "app")
 	storageB, _ := gredis.NewMachineStorage(adapter, "app")
 
-	a, err := storageA.Allocate(ctx, "app", "node-a", 10)
+	a, err := storageA.Distribute(ctx, "app", "node-a", 10, time.Minute, false)
 	if err != nil {
 		t.Fatalf("allocate a: %v", err)
 	}
-	b, err := storageB.Allocate(ctx, "app", "node-b", 10)
+	b, err := storageB.Distribute(ctx, "app", "node-b", 10, time.Minute, false)
 	if err != nil {
 		t.Fatalf("allocate b: %v", err)
 	}
@@ -234,17 +236,17 @@ func TestRedisSegmentAndMachineSlots(t *testing.T) {
 	}
 
 	// Re-allocating for a known instance returns its slot.
-	again, err := storageA.Allocate(ctx, "app", "node-a", 10)
+	again, err := storageA.Distribute(ctx, "app", "node-a", 10, time.Minute, false)
 	if err != nil || again.MachineID != a.MachineID {
 		t.Fatalf("re-allocate = %+v, %v", again, err)
 	}
 
 	// Revert puts the slot back for reuse.
-	if err := storageB.Revert(ctx, "app", "node-b"); err != nil {
+	if err := storageB.Revert(ctx, "app", "node-b", b, false); err != nil {
 		t.Fatalf("revert: %v", err)
 	}
 	storageC, _ := gredis.NewMachineStorage(adapter, "app")
-	c, err := storageC.Allocate(ctx, "app", "node-c", 10)
+	c, err := storageC.Distribute(ctx, "app", "node-c", 10, time.Minute, false)
 	if err != nil {
 		t.Fatalf("allocate c: %v", err)
 	}
@@ -277,13 +279,13 @@ func TestRedisMachineExhaustion(t *testing.T) {
 	// third instance must be refused.
 	for _, instance := range []string{"node-a", "node-b"} {
 		storage, _ := gredis.NewMachineStorage(adapter, "exhaust")
-		if _, err := storage.Allocate(ctx, "exhaust", instance, 1); err != nil {
+		if _, err := storage.Distribute(ctx, "exhaust", instance, 1, time.Minute, false); err != nil {
 			t.Fatalf("allocate %s: %v", instance, err)
 		}
 	}
 
 	third, _ := gredis.NewMachineStorage(adapter, "exhaust")
-	if _, err := third.Allocate(ctx, "exhaust", "node-c", 1); !errors.Is(err, gcosid.ErrExhausted) {
+	if _, err := third.Distribute(ctx, "exhaust", "node-c", 1, time.Minute, false); !errors.Is(err, gcosid.ErrExhausted) {
 		t.Fatalf("err = %v, want ErrExhausted", err)
 	}
 }
@@ -294,7 +296,7 @@ func TestRedisMachineGuardRequiresASlot(t *testing.T) {
 	adapter := redisAdapter{client: startRedis(t)}
 
 	storage, _ := gredis.NewMachineStorage(adapter, "guard")
-	err := storage.Update(context.Background(), "guard", gcosid.MachineState{MachineID: 1, InstanceID: "node-x"})
+	err := storage.Guard(context.Background(), "guard", gcosid.MachineState{MachineID: 1, InstanceID: "node-x"}, time.Minute, false)
 	if !errors.Is(err, gcosid.ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
@@ -343,9 +345,9 @@ func TestMySQLMachineSlotNameIsPadded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
-	state, err := storage.Allocate(ctx, "xdmp", "node-a", 10)
+	state, err := storage.Distribute(ctx, "xdmp", "node-a", 10, time.Minute, false)
 	if err != nil {
-		t.Fatalf("allocate: %v", err)
+		t.Fatalf("distribute: %v", err)
 	}
 
 	var name string
@@ -383,15 +385,153 @@ func TestMySQLMachineSlotsAreExclusiveAcrossInstances(t *testing.T) {
 	first, _ := database.NewMachineStorage(db, "xdmp")
 	second, _ := database.NewMachineStorage(db, "xdmp")
 
-	a, err := first.Allocate(ctx, "xdmp", "node-a", 10)
+	a, err := first.Distribute(ctx, "xdmp", "node-a", 10, time.Minute, false)
 	if err != nil {
-		t.Fatalf("allocate a: %v", err)
+		t.Fatalf("distribute a: %v", err)
 	}
-	b, err := second.Allocate(ctx, "xdmp", "node-b", 10)
+	b, err := second.Distribute(ctx, "xdmp", "node-b", 10, time.Minute, false)
 	if err != nil {
-		t.Fatalf("allocate b: %v", err)
+		t.Fatalf("distribute b: %v", err)
 	}
 	if a.MachineID == b.MachineID {
 		t.Fatalf("two instances share machine id %d", a.MachineID)
+	}
+}
+
+// CosID's first machine id is 0: `select max(machine_id)+1` over an empty table
+// is NULL and `getInt` maps NULL to 0. Starting at 1 would leave id 0 unused in
+// Go and reclaimable in Java, which is exactly the mixed-deployment hazard.
+func TestMySQLMachineFirstIDIsZero(t *testing.T) {
+	db := startMySQL(t)
+	ctx := context.Background()
+	resetMachineTable(t, db)
+
+	storage, err := database.NewMachineStorage(db, "xdmp")
+	if err != nil {
+		t.Fatalf("storage: %v", err)
+	}
+	state, err := storage.Distribute(ctx, "xdmp", "node-a", 10, time.Minute, false)
+	if err != nil {
+		t.Fatalf("distribute: %v", err)
+	}
+	if state.MachineID != 0 {
+		t.Fatalf("first machine id = %d, want 0", state.MachineID)
+	}
+
+	var name string
+	if err := db.QueryRowContext(ctx, `SELECT name FROM cosid_machine WHERE machine_id = 0`).Scan(&name); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if name != "xdmp.00000000" {
+		t.Fatalf("slot name = %q, want xdmp.00000000", name)
+	}
+}
+
+// CosID's revertRemote clears instance_id for unstable instances so the slot is
+// immediately reusable, and keeps it for stable ones.
+func TestMySQLMachineRevert(t *testing.T) {
+	db := startMySQL(t)
+	ctx := context.Background()
+	resetMachineTable(t, db)
+
+	storage, _ := database.NewMachineStorage(db, "xdmp")
+	state, err := storage.Distribute(ctx, "xdmp", "node-a", 10, time.Minute, false)
+	if err != nil {
+		t.Fatalf("distribute: %v", err)
+	}
+
+	if err := storage.Revert(ctx, "xdmp", "node-a", state, false); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	var owner string
+	if err := db.QueryRowContext(ctx, `SELECT instance_id FROM cosid_machine WHERE machine_id = ?`, state.MachineID).Scan(&owner); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if owner != "" {
+		t.Fatalf("instance_id = %q, want empty after an unstable revert", owner)
+	}
+
+	// The released slot is taken by the next instance.
+	next, err := storage.Distribute(ctx, "xdmp", "node-b", 10, time.Minute, false)
+	if err != nil {
+		t.Fatalf("distribute after revert: %v", err)
+	}
+	if next.MachineID != state.MachineID {
+		t.Fatalf("machine id = %d, want the released %d", next.MachineID, state.MachineID)
+	}
+
+	// A stable revert keeps the owner.
+	stable, _ := database.NewMachineStorage(db, "xdmp2")
+	stableID, err := stable.Distribute(ctx, "xdmp2", "pod-0", 10, time.Minute, true)
+	if err != nil {
+		t.Fatalf("stable distribute: %v", err)
+	}
+	if err := stable.Revert(ctx, "xdmp2", "pod-0", stableID, true); err != nil {
+		t.Fatalf("stable revert: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT instance_id FROM cosid_machine WHERE namespace = 'xdmp2'`).Scan(&owner); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if owner != "pod-0" {
+		t.Fatalf("stable instance_id = %q, want pod-0", owner)
+	}
+}
+
+// Guard must fail once the slot belongs to someone else, otherwise an instance
+// keeps issuing ids with a machine id it no longer owns.
+func TestMySQLMachineGuardDetectsLostSlot(t *testing.T) {
+	db := startMySQL(t)
+	ctx := context.Background()
+	resetMachineTable(t, db)
+
+	// MySQL reports *changed* rows, not matched rows: writing the same timestamp
+	// back affects 0 rows, which CosID reads as a lost lease. Move the clock so a
+	// heartbeat actually refreshes the row, like the real guard loop does.
+	now := time.Now().UnixMilli()
+	storage, _ := database.NewMachineStorage(db, "xdmp", database.WithMachineClock(func() int64 { return now }))
+	state, err := storage.Distribute(ctx, "xdmp", "node-a", 10, time.Minute, false)
+	if err != nil {
+		t.Fatalf("distribute: %v", err)
+	}
+	now += 30_000
+	if err := storage.Guard(ctx, "xdmp", state, time.Minute, false); err != nil {
+		t.Fatalf("guard: %v", err)
+	}
+
+	// Another instance takes the slot by reverting it first.
+	if err := storage.Revert(ctx, "xdmp", "node-a", state, false); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if _, err := storage.Distribute(ctx, "xdmp", "node-b", 10, time.Minute, false); err != nil {
+		t.Fatalf("distribute b: %v", err)
+	}
+
+	err = storage.Guard(ctx, "xdmp", state, time.Minute, false)
+	if err == nil {
+		t.Fatal("guard succeeded although the slot moved to another instance")
+	}
+	if !errors.Is(err, gcosid.ErrInvalidMachineID) {
+		t.Fatalf("err = %v, want ErrInvalidMachineID", err)
+	}
+}
+
+// resetMachineTable recreates cosid_machine so each test starts from empty.
+func resetMachineTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS cosid_machine`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE cosid_machine (
+		name VARCHAR(100) NOT NULL,
+		namespace VARCHAR(100) NOT NULL,
+		machine_id INT UNSIGNED NOT NULL DEFAULT 0,
+		last_timestamp BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		instance_id VARCHAR(100) NOT NULL DEFAULT '',
+		distribute_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		revert_time BIGINT UNSIGNED NOT NULL DEFAULT 0,
+		PRIMARY KEY (name)
+	) ENGINE = InnoDB`); err != nil {
+		t.Fatalf("schema: %v", err)
 	}
 }

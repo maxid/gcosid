@@ -3,6 +3,7 @@ package gcosid
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -15,37 +16,22 @@ type MachineState struct {
 	InstanceID    string
 }
 
-// MachineIdDistributor hands a snowflake generator its machine id.
-//
-// CosID never derives the machine id from a hostname or a random value: the id
-// must come from explicit configuration or a leased slot, because a duplicate
-// machine id silently produces duplicate snowflakes.
-type MachineIdDistributor interface {
-	// Distribute returns this instance's machine id for the namespace.
-	Distribute(ctx context.Context, namespace string) (int64, error)
-	// Revert releases the slot on shutdown.
-	Revert(ctx context.Context) error
-	// Guard renews the lease on the slot. Returning an error means the slot may
-	// already belong to another instance.
-	Guard(ctx context.Context, namespace string) error
-	// InstanceID identifies this process in the state store.
-	InstanceID() string
-}
-
-// MachineStateStorage persists machine slots. Implementations must make
-// Allocate atomic: two instances asking at the same time must never receive the
-// same machine id.
-type MachineStateStorage interface {
-	// Allocate returns the slot for instanceID, creating or reusing it.
-	Allocate(ctx context.Context, namespace, instanceID string, maxMachineID int64) (MachineState, error)
-	// Update persists the last timestamp handed out for the slot.
-	Update(ctx context.Context, namespace string, state MachineState) error
-	// Get reads the current slot of instanceID.
-	Get(ctx context.Context, namespace, instanceID string) (MachineState, bool, error)
+// SafeGuardAt mirrors MachineIdDistributor.getSafeGuardAt: a stable instance or a
+// non-positive guard yields 0, which makes the reclaim predicate
+// `last_timestamp <= 0` — i.e. nothing is ever reclaimed by age.
+func SafeGuardAt(now int64, safeGuard time.Duration, stable bool) int64 {
+	if stable || safeGuard <= 0 {
+		return 0
+	}
+	at := now - safeGuard.Milliseconds()
+	if at < 0 {
+		return 0
+	}
+	return at
 }
 
 // ManualDistributor uses a configured machine id, which is what single-host and
-// explicit-container deployments use.
+// explicit-container deployments use — CosID's ManualMachineIdDistributor.
 type ManualDistributor struct {
 	MachineID int64
 	Instance  string
@@ -75,70 +61,186 @@ func (m *ManualDistributor) Guard(context.Context, string) error { return nil }
 // InstanceID implements MachineIdDistributor.
 func (m *ManualDistributor) InstanceID() string { return m.Instance }
 
+// MachineStateStorage is the persistent side of machine-id allocation: the three
+// operations CosID's JDBC and Redis distributors perform. Each implementation
+// must run the statements of its CosID counterpart verbatim, because a Go process
+// and a Java process share the same table (or the same Redis keys).
+type MachineStateStorage interface {
+	// Distribute returns this instance's machine id for the namespace. The
+	// implementation follows CosID's order: reuse an own live slot, take a
+	// released slot, otherwise append a new id.
+	Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (MachineState, error)
+	// Guard refreshes the slot's last_timestamp. A slot that no longer belongs
+	// to the instance is an error, never a silent success.
+	Guard(ctx context.Context, namespace string, state MachineState, safeGuard time.Duration, stable bool) error
+	// Revert releases the slot: CosID clears instance_id for unstable instances
+	// and keeps it for stable ones.
+	Revert(ctx context.Context, namespace, instanceID string, state MachineState, stable bool) error
+}
+
+// MachineIdDistributor hands a snowflake generator its machine id.
+//
+// CosID never derives the machine id from a hostname or a random value: the id
+// must come from explicit configuration or a leased slot, because a duplicate
+// machine id silently produces duplicate snowflakes.
+type MachineIdDistributor interface {
+	// Distribute returns this instance's machine id for the namespace.
+	Distribute(ctx context.Context, namespace string) (int64, error)
+	// Revert releases the slot on shutdown.
+	Revert(ctx context.Context) error
+	// Guard renews the lease on the slot. Returning an error means the slot may
+	// already belong to another instance.
+	Guard(ctx context.Context, namespace string) error
+	// InstanceID identifies this process in the state store.
+	InstanceID() string
+}
+
 // MemoryMachineStorage is an in-process MachineStateStorage for tests and
-// single-instance deployments. It is NOT safe across processes: production uses
-// the JDBC or Redis adapter, where the assignment is atomic.
+// single-instance deployments. It mimics the `cosid_machine` table: slots are
+// keyed by padded name, and a released slot (empty instance id or a stale
+// heartbeat) is reusable. It is NOT safe across processes.
 type MemoryMachineStorage struct {
 	mu    sync.Mutex
-	next  int64
-	slots map[string]MachineState // key: namespace|instance
+	slots map[string]MachineState // key: namespace|machineID
+	next  map[string]int64        // namespace -> last allocated machine id (-1 = none)
 }
 
 // NewMemoryMachineStorage creates an empty store.
 func NewMemoryMachineStorage() *MemoryMachineStorage {
-	return &MemoryMachineStorage{slots: map[string]MachineState{}}
+	return &MemoryMachineStorage{slots: map[string]MachineState{}, next: map[string]int64{}}
 }
 
-// Allocate implements MachineStateStorage.
-func (m *MemoryMachineStorage) Allocate(_ context.Context, namespace, instanceID string, maxMachineID int64) (MachineState, error) {
+// Distribute implements MachineStateStorage with the same order as CosID.
+func (m *MemoryMachineStorage) Distribute(_ context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (MachineState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := namespace + "|" + instanceID
-	if state, ok := m.slots[key]; ok {
-		return state, nil
+	now := time.Now().UnixMilli()
+	safeGuardAt := SafeGuardAt(now, safeGuard, stable)
+
+	// 1. Own live slot.
+	for _, state := range m.slots {
+		if state.InstanceID == instanceID && state.LastTimestamp > safeGuardAt {
+			return state, nil
+		}
 	}
-	if m.next >= maxMachineID {
+	// 2. Released slot (empty owner or stale heartbeat), lowest id first.
+	var released bool
+	var best MachineState
+	for _, state := range m.slots {
+		if state.InstanceID == "" || state.LastTimestamp <= safeGuardAt {
+			if !released || state.MachineID < best.MachineID {
+				best, released = state, true
+			}
+		}
+	}
+	if released {
+		// CosID returns the previous timestamp; the row itself gets `now`.
+		claimed := MachineState{MachineID: best.MachineID, LastTimestamp: best.LastTimestamp, InstanceID: instanceID}
+		m.put(namespace, MachineState{MachineID: best.MachineID, LastTimestamp: now, InstanceID: instanceID})
+		return claimed, nil
+	}
+	// 3. Append a new id; CosID's `select max(machine_id)+1` over an empty table
+	// yields NULL, and `getInt` turns that into 0.
+	next := m.next[namespace]
+	if _, ok := m.next[namespace]; !ok {
+		next = -1
+	}
+	if next < 0 {
+		// Distinguish "no rows yet" from "rows starting at 0": use the highest
+		// known id instead of a separate counter when slots exist.
+		highest := int64(-1)
+		for _, state := range m.slots {
+			if state.MachineID > highest {
+				highest = state.MachineID
+			}
+		}
+		next = highest
+	}
+	candidate := next + 1
+	if candidate > maxMachineID {
 		return MachineState{}, fmt.Errorf("%w: namespace %s exhausted", ErrExhausted, namespace)
 	}
-	m.next++
-	state := MachineState{MachineID: m.next, InstanceID: instanceID}
-	m.slots[key] = state
+	state := MachineState{MachineID: candidate, LastTimestamp: now, InstanceID: instanceID}
+	m.put(namespace, state)
+	m.next[namespace] = candidate
 	return state, nil
 }
 
-// Update implements MachineStateStorage.
-func (m *MemoryMachineStorage) Update(_ context.Context, namespace string, state MachineState) error {
+// Guard implements MachineStateStorage.
+func (m *MemoryMachineStorage) Guard(_ context.Context, namespace string, state MachineState, _ time.Duration, _ bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := namespace + "|" + state.InstanceID
-	if _, ok := m.slots[key]; !ok {
-		return fmt.Errorf("%w: no slot for instance %s", ErrInvalidConfig, state.InstanceID)
+	current, ok := m.slots[namespace+"|"+strconv.FormatInt(state.MachineID, 10)]
+	if !ok || current.InstanceID != state.InstanceID {
+		return fmt.Errorf("%w: slot %d of %s is no longer owned by %s", ErrInvalidMachineID, state.MachineID, namespace, state.InstanceID)
 	}
-	m.slots[key] = state
+	current.LastTimestamp = time.Now().UnixMilli()
+	m.put(namespace, current)
 	return nil
 }
 
-// Get implements MachineStateStorage.
-func (m *MemoryMachineStorage) Get(_ context.Context, namespace, instanceID string) (MachineState, bool, error) {
+// Revert implements MachineStateStorage: unstable instances clear the owner so the
+// slot is immediately reusable; stable instances keep it.
+func (m *MemoryMachineStorage) Revert(_ context.Context, namespace, instanceID string, state MachineState, stable bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	state, ok := m.slots[namespace+"|"+instanceID]
-	return state, ok, nil
+
+	key := namespace + "|" + strconv.FormatInt(state.MachineID, 10)
+	current, ok := m.slots[key]
+	if !ok || current.InstanceID != instanceID {
+		return nil
+	}
+	owner := ""
+	if stable {
+		owner = instanceID
+	}
+	current.InstanceID = owner
+	m.slots[key] = current
+	return nil
 }
 
-// LeaseDistributor obtains the machine id from a state store.
+func (m *MemoryMachineStorage) put(namespace string, state MachineState) {
+	m.slots[namespace+"|"+strconv.FormatInt(state.MachineID, 10)] = state
+}
+
+// LeaseDistributor obtains the machine id from a state store and caches it
+// locally — CosID's AbstractMachineIdDistributor plus its MachineStateStorage
+// cache. The cache is why a restart reuses the same machine id without a remote
+// round trip.
 type LeaseDistributor struct {
 	storage    MachineStateStorage
 	instanceID string
 	maxID      int64
-	namespace  string
+	stable     bool
+	safeGuard  time.Duration
+
+	mu    sync.Mutex
+	local map[string]MachineState
+}
+
+// LeaseOption configures a LeaseDistributor.
+type LeaseOption func(*LeaseDistributor)
+
+// WithLeaseStable marks the instance stable: its slot is never reclaimed by age
+// and revert keeps the instance id, matching InstanceId(stable=true).
+func WithLeaseStable(stable bool) LeaseOption {
+	return func(l *LeaseDistributor) { l.stable = stable }
+}
+
+// WithLeaseSafeGuard sets the reclaim window used by the store.
+func WithLeaseSafeGuard(d time.Duration) LeaseOption {
+	return func(l *LeaseDistributor) {
+		if d > 0 {
+			l.safeGuard = d
+		}
+	}
 }
 
 // NewLeaseDistributor creates a distributor backed by a state store. maxID is
 // the layout's machine-id ceiling.
-func NewLeaseDistributor(storage MachineStateStorage, instanceID string, maxMachineID int64) (*LeaseDistributor, error) {
+func NewLeaseDistributor(storage MachineStateStorage, instanceID string, maxMachineID int64, opts ...LeaseOption) (*LeaseDistributor, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("%w: machine state storage is required", ErrInvalidConfig)
 	}
@@ -148,41 +250,71 @@ func NewLeaseDistributor(storage MachineStateStorage, instanceID string, maxMach
 	if maxMachineID <= 0 {
 		return nil, fmt.Errorf("%w: max machine id must be positive", ErrInvalidConfig)
 	}
-	return &LeaseDistributor{storage: storage, instanceID: instanceID, maxID: maxMachineID}, nil
+	l := &LeaseDistributor{
+		storage:    storage,
+		instanceID: instanceID,
+		maxID:      maxMachineID,
+		safeGuard:  10 * time.Minute,
+		local:      map[string]MachineState{},
+	}
+	for _, o := range opts {
+		o(l)
+	}
+	return l, nil
 }
 
-// Distribute implements MachineIdDistributor.
+// Distribute implements MachineIdDistributor. A locally known slot wins, exactly
+// like the local MachineStateStorage cache in CosID.
 func (l *LeaseDistributor) Distribute(ctx context.Context, namespace string) (int64, error) {
-	state, err := l.storage.Allocate(ctx, namespace, l.instanceID, l.maxID)
+	l.mu.Lock()
+	if state, ok := l.local[namespace]; ok {
+		l.mu.Unlock()
+		return state.MachineID, nil
+	}
+	l.mu.Unlock()
+
+	state, err := l.storage.Distribute(ctx, namespace, l.instanceID, l.maxID, l.safeGuard, l.stable)
 	if err != nil {
 		return 0, err
 	}
-	l.namespace = namespace
+	state.InstanceID = l.instanceID
+
+	l.mu.Lock()
+	l.local[namespace] = state
+	l.mu.Unlock()
 	return state.MachineID, nil
 }
 
-// Revert releases nothing implicitly: the slot stays reserved for this instance
-// so a restart reuses the same machine id instead of racing for a new one.
-func (l *LeaseDistributor) Revert(context.Context) error { return nil }
+// Revert implements MachineIdDistributor: release the remote slot, keeping the
+// local cache so a restart reuses the same id (CosID does not clear it either).
+func (l *LeaseDistributor) Revert(ctx context.Context) error {
+	l.mu.Lock()
+	states := make(map[string]MachineState, len(l.local))
+	for ns, state := range l.local {
+		states[ns] = state
+	}
+	l.mu.Unlock()
 
-// Guard implements MachineIdDistributor: refresh the slot's last_timestamp so the
-// safe-guard window does not expire. A missing slot means the lease is gone.
-func (l *LeaseDistributor) Guard(ctx context.Context, namespace string) error {
-	if l.namespace != "" && namespace == "" {
-		namespace = l.namespace
-	}
-	state, ok, err := l.storage.Get(ctx, namespace, l.instanceID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("%w: no machine slot for instance %s", ErrInvalidMachineID, l.instanceID)
-	}
-	state.LastTimestamp = time.Now().UnixMilli()
-	if err := l.storage.Update(ctx, namespace, state); err != nil {
-		return err
+	for namespace, state := range states {
+		if err := l.storage.Revert(ctx, namespace, l.instanceID, state, l.stable); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// Guard implements MachineIdDistributor: refresh every known slot. A slot the
+// store no longer recognises is reported, because another instance may own it.
+func (l *LeaseDistributor) Guard(ctx context.Context, namespace string) error {
+	l.mu.Lock()
+	state, ok := l.local[namespace]
+	if !ok {
+		l.mu.Unlock()
+		return fmt.Errorf("%w: no machine slot for instance %s in %s", ErrInvalidMachineID, l.instanceID, namespace)
+	}
+	l.mu.Unlock()
+
+	return l.storage.Guard(ctx, namespace, state, l.safeGuard, l.stable)
 }
 
 // InstanceID implements MachineIdDistributor.

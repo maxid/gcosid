@@ -163,7 +163,9 @@ end
 return 0;
 `
 
-// MachineStorage implements gcosid.MachineStateStorage on top of the scripts.
+// MachineStorage implements gcosid.MachineStateStorage with CosID's three Lua
+// scripts. The keys, the value format and the safe-guard predicate are the Java
+// ones, so a Go process and a Java process share one slot table.
 type MachineStorage struct {
 	client    Client
 	namespace string
@@ -212,14 +214,14 @@ func NewMachineStorage(client Client, namespace string, opts ...MachineOption) (
 	return m, nil
 }
 
-// Allocate implements gcosid.MachineStateStorage.
-func (m *MachineStorage) Allocate(ctx context.Context, namespace, instanceID string, maxMachineID int64) (gcosid.MachineState, error) {
+// Distribute implements gcosid.MachineStateStorage.
+func (m *MachineStorage) Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (gcosid.MachineState, error) {
 	if namespace == "" {
 		namespace = m.namespace
 	}
 	now := m.now()
 	reply, err := m.client.Eval(ctx, distributeScript, []string{namespace},
-		instanceID, maxMachineID, now, now-m.safeGuard.Milliseconds())
+		instanceID, maxMachineID, now, gcosid.SafeGuardAt(now, m.effectiveSafeGuard(safeGuard), stable))
 	if err != nil {
 		return gcosid.MachineState{}, fmt.Errorf("%w: machine distribute: %w", gcosid.ErrAllocatorUnavailable, err)
 	}
@@ -234,8 +236,8 @@ func (m *MachineStorage) Allocate(ctx context.Context, namespace, instanceID str
 	return gcosid.MachineState{MachineID: machineID, LastTimestamp: lastStamp, InstanceID: instanceID}, nil
 }
 
-// Update implements gcosid.MachineStateStorage (the guard script).
-func (m *MachineStorage) Update(ctx context.Context, namespace string, state gcosid.MachineState) error {
+// Guard implements gcosid.MachineStateStorage (the guard script).
+func (m *MachineStorage) Guard(ctx context.Context, namespace string, state gcosid.MachineState, _ time.Duration, _ bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}
@@ -249,28 +251,10 @@ func (m *MachineStorage) Update(ctx context.Context, namespace string, state gco
 	return nil
 }
 
-// Get implements gcosid.MachineStateStorage. The scripts keep the state in a
-// hash, so a read is a plain HGET through a tiny Lua wrapper.
-func (m *MachineStorage) Get(ctx context.Context, namespace, instanceID string) (gcosid.MachineState, bool, error) {
-	if namespace == "" {
-		namespace = m.namespace
-	}
-	reply, err := m.client.Eval(ctx, getScript, []string{namespace}, instanceID)
-	if err != nil {
-		return gcosid.MachineState{}, false, fmt.Errorf("gcosid/redis: machine get: %w", err)
-	}
-	if reply == nil {
-		return gcosid.MachineState{}, false, nil
-	}
-	machineID, lastStamp, err := parseState(reply)
-	if err != nil || machineID < 0 {
-		return gcosid.MachineState{}, false, err
-	}
-	return gcosid.MachineState{MachineID: machineID, LastTimestamp: lastStamp, InstanceID: instanceID}, true, nil
-}
-
-// Revert implements gcosid.MachineStateStorage (the revert script).
-func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string) error {
+// Revert implements gcosid.MachineStateStorage (the revert script). The script
+// keeps the instance id and moves the slot to the revert hash, which is CosID's
+// behaviour for both stable and unstable instances on Redis.
+func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string, _ gcosid.MachineState, _ bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}
@@ -280,14 +264,13 @@ func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID strin
 	return nil
 }
 
-const getScript = `
-local namespace = KEYS[1];
-local instanceId = ARGV[1];
-local value = redis.call('hget', 'cosid' .. ':' .. namespace .. ':itc_idx', instanceId);
-if not value then return nil end
-local splitIdx = string.find(value, '|', 1);
-return { tonumber(string.sub(value, 1, splitIdx - 1)), tonumber(string.sub(value, splitIdx + 1, -1)) };
-`
+// effectiveSafeGuard prefers the caller's window and falls back to the storage's.
+func (m *MachineStorage) effectiveSafeGuard(safeGuard time.Duration) time.Duration {
+	if safeGuard > 0 {
+		return safeGuard
+	}
+	return m.safeGuard
+}
 
 func parseState(reply any) (int64, int64, error) {
 	values, ok := reply.([]any)

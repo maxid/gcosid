@@ -43,6 +43,13 @@ Rule that will not change: uniqueness is only promised inside a configured
 allocation domain. Gaps, restart waste and clock-regression errors are allowed —
 "looks continuous" is never a reason to weaken uniqueness.
 
+## CosID parity
+
+The baseline is CosID **v2.15.1**. The authoritative parity spec — every SQL
+statement, Redis key and semantic the library must match, and the driver flags
+that make it match — lives in the consuming project:
+[`xdmp-go/docs/design/gcosid-cosid-parity.md`](https://github.com/maxid/xdmp-go/blob/main/docs/design/gcosid-cosid-parity.md).
+
 ## Testing
 
 | Command | Covers | Requires |

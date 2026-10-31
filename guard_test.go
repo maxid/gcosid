@@ -129,31 +129,3 @@ func TestNoopGuarder(t *testing.T) {
 		t.Fatal("noop guarder must have no state")
 	}
 }
-
-func TestLeaseDistributorGuardRefreshesTheSlot(t *testing.T) {
-	storage := NewMemoryMachineStorage()
-	lease, err := NewLeaseDistributor(storage, "node-a", 10)
-	if err != nil {
-		t.Fatalf("lease: %v", err)
-	}
-	if _, err := lease.Distribute(context.Background(), "order"); err != nil {
-		t.Fatalf("distribute: %v", err)
-	}
-
-	if err := lease.Guard(context.Background(), "order"); err != nil {
-		t.Fatalf("guard: %v", err)
-	}
-	state, ok, err := storage.Get(context.Background(), "order", "node-a")
-	if err != nil || !ok {
-		t.Fatalf("state = %+v, %v, %v", state, ok, err)
-	}
-	if state.LastTimestamp == 0 {
-		t.Fatal("guard did not refresh the timestamp")
-	}
-
-	// An instance with no slot cannot guard.
-	orphan, _ := NewLeaseDistributor(storage, "node-z", 10)
-	if err := orphan.Guard(context.Background(), "order"); !errors.Is(err, ErrInvalidMachineID) {
-		t.Fatalf("orphan guard err = %v, want ErrInvalidMachineID", err)
-	}
-}
