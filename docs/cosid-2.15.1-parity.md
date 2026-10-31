@@ -85,6 +85,26 @@ otherwise).
   (`RadixIdConverter.maxCharSize(10, bits)`). It is a *rendering*: the numeric id
   is unchanged. An earlier Go version printed the raw epoch millis — wrong.
 
+## Grouping
+
+`DefaultGroupedIdSegmentDistributor` does not partition one counter — it creates a
+**new distributor per period**, named `{name}@{groupKey}`, and `GroupBySupplier`
+produces the key plus its expiry:
+
+| supplier | key | ttl ends at |
+|---|---|---|
+| `YearGroupBySupplier` | `2026` | the last instant of the year |
+| `YearMonthGroupBySupplier` | `2026-10` | the last instant of the month |
+| `YearMonthDayGroupBySupplier` | `2026-10-31` | the last instant of the day |
+
+`ttlAt` is `LocalDateTime.MAX` of the period in epoch **seconds**
+(`toInstant().toEpochMilli() / 1000`). `GroupedPrefixIdConverter` renders
+`<groupKey><delimiter><id>`, e.g. `2026-000042`.
+
+One difference in the Go port: CosID reads the current key from a `ThreadLocal`
+(`GroupedAccessor`), while this library returns the key next to the id. Ambient
+state would make concurrent callers silently pick up each other's group.
+
 ## Benchmark method
 
 The tag compiles for **JDK 17** (`build.gradle.kts`, toolchain 17).
