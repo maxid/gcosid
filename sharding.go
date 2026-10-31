@@ -324,3 +324,101 @@ func (c *CachedSharding[T]) EffectiveNodes() []string { return c.Actual.Effectiv
 
 // JoinNodes renders a node list for logs and diagnostics.
 func JoinNodes(nodes []string) string { return strings.Join(nodes, ",") }
+
+// LocalDateTimeConverter turns a sharding value of any supported shape into an
+// instant — CosID's LocalDateTimeConvertor. Sharding then works uniformly for
+// timestamps, formatted strings and snowflake ids.
+type LocalDateTimeConverter interface {
+	ToTime(value any) (time.Time, error)
+}
+
+// StandardConverter accepts time.Time, epoch millis or seconds, and RFC3339
+// strings — CosID's StandardLocalDateTimeConvertor.
+type StandardConverter struct {
+	// SecondEpoch treats numeric values as seconds instead of milliseconds.
+	SecondEpoch bool
+	Location    *time.Location
+	// Layout parses string values; RFC3339 when empty.
+	Layout string
+}
+
+// ToTime implements LocalDateTimeConverter.
+func (c StandardConverter) ToTime(value any) (time.Time, error) {
+	location := c.Location
+	if location == nil {
+		location = time.UTC
+	}
+
+	switch v := value.(type) {
+	case time.Time:
+		return v, nil
+	case int64:
+		return c.fromNumeric(v, location), nil
+	case int:
+		return c.fromNumeric(int64(v), location), nil
+	case string:
+		layout := c.Layout
+		if layout == "" {
+			if parsed, err := time.Parse(time.RFC3339, v); err == nil {
+				return parsed.In(location), nil
+			}
+			return time.Time{}, fmt.Errorf("%w: %q is not RFC3339", ErrInvalidConfig, v)
+		}
+		parsed, err := time.ParseInLocation(layout, v, location)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("%w: %q does not match %q", ErrInvalidConfig, v, layout)
+		}
+		return parsed, nil
+	default:
+		return time.Time{}, fmt.Errorf("%w: unsupported sharding value %T", ErrInvalidConfig, value)
+	}
+}
+
+func (c StandardConverter) fromNumeric(v int64, location *time.Location) time.Time {
+	if c.SecondEpoch {
+		return time.Unix(v, 0).In(location)
+	}
+	return time.UnixMilli(v).In(location)
+}
+
+// SnowflakeConverter goes the other way: from an id (or its rendered string) to the
+// instant it was generated — CosID's SnowflakeLocalDateTimeConvertor. That is what
+// lets a sharding question start from an id instead of a timestamp.
+type SnowflakeConverter struct {
+	Layout Layout
+	// Radix parses string values; nil means decimal.
+	Radix *Radix
+}
+
+// ToTime implements LocalDateTimeConverter.
+func (c SnowflakeConverter) ToTime(value any) (time.Time, error) {
+	var id int64
+	switch v := value.(type) {
+	case int64:
+		id = v
+	case int:
+		id = int64(v)
+	case string:
+		if c.Radix == nil {
+			parsed, err := ToString{}.parse(v)
+			if err != nil {
+				return time.Time{}, err
+			}
+			id = parsed
+		} else {
+			parsed, err := c.Radix.Parse(v)
+			if err != nil {
+				return time.Time{}, err
+			}
+			id = parsed
+		}
+	default:
+		return time.Time{}, fmt.Errorf("%w: unsupported sharding value %T", ErrInvalidConfig, value)
+	}
+
+	state := c.Layout.Parse(id)
+	if c.Layout.Epoch == CosIdEpochSecond || c.Layout.TimestampBits == SecondLayout.TimestampBits {
+		return time.Unix(state.Timestamp, 0), nil
+	}
+	return time.UnixMilli(state.Timestamp), nil
+}

@@ -37,6 +37,11 @@ Consumers pick a generator; the library never mixes layouts silently.
 | Diagnostics: `Statistical` stats for generators and converters | done |
 | `UncertaintyIdGenerator`: random low bits on top of an ordered id | done |
 | Struct-tag id injection (`@CosId` + `EnsureId` equivalent) | done |
+| String views: `StringSegmentId`, `StringSnowflakeId` (stat keeps the converter) | done |
+| Clock-sync decorators for any generator (`ClockSyncSnowflakeId` / `ClockSyncCosIdGenerator`) | done |
+| Local machine-state cache file (`LocalMachineStateStorage`) | done |
+| Host address supplier + `InstanceId.of(host, port)` | done |
+| Sharding value converters (`StandardLocalDateTimeConvertor`, `SnowflakeLocalDateTimeConvertor`) | done |
 | CosID golden compatibility vectors (segment bounds, bit layout, strings) | planned |
 
 Rule that will not change: uniqueness is only promised inside a configured

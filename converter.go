@@ -136,6 +136,15 @@ type ToString struct{}
 // Format implements StringConverter.
 func (ToString) Format(id int64) string { return strconv.FormatInt(id, 10) }
 
+// parse is the inverse of Format.
+func (ToString) parse(value string) (int64, error) {
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, &converterError{"decimal id expected, got " + value}
+	}
+	return id, nil
+}
+
 // SnowflakeFriendly renders a snowflake id the way CosID's
 // Millisecond/SecondSnowflakeIdStateParser does:
 //

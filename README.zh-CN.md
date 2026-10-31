@@ -21,7 +21,12 @@ Go 的号段与雪花 ID 生成。
 | 号段 TTL / 过期废弃、步长调优 | 完成（TTL）/ 计划中（步长） |
 | 雪花：布局/纪元/序列号 + 毫秒、秒与 JS-safe 变体 | 完成 |
 | 机器号分发：手工指定 id、租约槽位 — 内存、JDBC `cosid_machine`、Redis Lua 脚本（逐字对齐 2.15.1） | 完成 |
-| 存储适配：MongoDB、ZooKeeper | 计划中 |
+| 字符串视图：`StringSegmentId`、`StringSnowflakeId` | 完成 |
+| 时钟回拨装饰器（任意生成器） | 完成 |
+| 本地机器状态文件缓存 | 完成 |
+| 主机地址供应商 / `InstanceId.of(host, port)` | 完成 |
+| 分片值转换器（标准时间与雪花 ID → 时间） | 完成 |
+| 存储适配：MongoDB、ZooKeeper | 计划中（最低优先级） |
 | 时钟回拨策略：严格报错或自旋/睡眠同步器 | 完成 |
 | 字符串转换器：2..62 进制、前缀、后缀、日期前缀、分组、转字符串 | 完成 |
 | 雪花友好渲染 `timestamp-machine-sequence` | 完成 |
