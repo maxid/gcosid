@@ -44,10 +44,11 @@ type SegmentOption func(*SegmentGenerator)
 
 // WithSegmentTTL gives reserved ranges a lifetime. An expired range is
 // abandoned and a new one is reserved, matching CosID's IdSegment.isExpired.
+// Durations shorter than a second round up, so a range never starts expired.
 func WithSegmentTTL(ttl time.Duration) SegmentOption {
 	return func(g *SegmentGenerator) {
 		if ttl > 0 {
-			g.ttl = int64(ttl.Seconds())
+			g.ttl = ttlSeconds(ttl)
 		}
 	}
 }
