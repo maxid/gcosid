@@ -120,50 +120,85 @@ go test -tags=integration ./...
 
 ## Id injection
 
-CosID annotates entity fields with `@CosId` and fills them through an accessor.
-Go has no annotations, so the equivalent is a struct tag:
+CosID annotates entity fields with `@CosId` and lets its Spring/MyBatis/Jackson
+plugins fill them. Go has neither annotations nor those plugin points, so gcosid
+uses a struct tag **and you call it explicitly**:
 
 ```go
 type Order struct {
-    ID     int64 `cosid:"order"`
+    ID     int64  `cosid:"order"`   // generator name
     Amount int64
 }
-
-injector := gcosid.NewInjector()
-injector.Register("order", chain)          // numeric field
-injector.RegisterString("no", orderNoGen)  // string field
-
-filled, err := injector.Ensure(ctx, &order) // fills only when the id is empty
-injector.EnsureAll(ctx, []*Order{{}, {}})   // batch
 ```
 
-### The shared generator
-
-One generator can serve every unnamed id field — CosID's `__share__` slot:
+### How to wire it
 
 ```go
-provider := gcosid.NewProvider()
-provider.SetShare(chain)
-
-type Audited struct {
-    ID int64 `cosid:""`   // empty tag = the shared generator
+// 1. one generator per entity kind
+chain, err := gcosid.NewChainGenerator("order", 100, alloc)
+if err != nil {
+    return err
 }
-injector := gcosid.NewInjectorFromProvider(provider)
+defer chain.Close(ctx)
+
+// 2. registry: tag name -> generator
+injector := gcosid.NewInjector()
+injector.Register("order", chain)          // numeric fields
+injector.RegisterString("orderNo", orderNo) // string fields
+
+// 3. the repository owns the call site
+type OrderRepo struct {
+    ids *gcosid.Injector
+    db  *sql.DB
+}
+
+func (r *OrderRepo) Create(ctx context.Context, order *Order) error {
+    if _, err := r.ids.Ensure(ctx, order); err != nil {
+        return fmt.Errorf("assign id: %w", err)
+    }
+    // ... INSERT ...
+}
+
+func (r *OrderRepo) CreateBatch(ctx context.Context, orders []*Order) error {
+    if _, err := r.ids.EnsureAll(ctx, orders); err != nil {
+        return fmt.Errorf("assign ids: %w", err)
+    }
+    // ... batch INSERT ...
+}
 ```
 
-As in `DefaultIdGeneratorProvider`, `Set`/`Remove`/`Get` with the name
-`"__share__"` operate on that same slot, so the two views never diverge.
+A full runnable program is in [`examples/repository`](examples/repository/main.go).
 
-See [`examples/inject`](examples/inject/main.go) for a runnable program.
+### There is no automatic fill
 
-Rules, matching `CosIdAccessor`:
+Because nothing injects ids behind your back, a write that skips `Ensure` inserts
+the zero id. That is the one failure mode to design against:
 
-- the tag value is a generator name; `cosid:"-"` opts out;
-- only `string` and the integer widths hold ids (`Long`/`Integer`/`String` in CosID);
-- an entity that already carries an id is never overwritten (`EnsureId`);
+- call `Ensure` in the repository's create path, not in handlers scattered around;
+- `Ensure` is idempotent — an entity that already has an id is never overwritten,
+  so calling it twice (or in both the service and the repository) is safe;
+- `EnsureAll` fills a slice in one call and reports how many rows needed an id;
+- a batch insert must call `EnsureAll` **before** building the statement, or every
+  row gets id 0 and the primary key collides.
+
+### Rules, matching `CosIdAccessor`
+
+- the tag value is a generator name; `cosid:"-"` opts out; `cosid:""` means the
+  shared generator (`Provider.SetShare`);
+- only `string` and the integer widths can hold ids (`String`/`Long`/`Integer` in
+  CosID); anything else fails at the first `Ensure`, not at random later;
+- the target must be a non-nil pointer to a struct;
 - embedded structs are searched, so a composite entity can inherit its id;
 - a string field fed by a numeric generator is rendered as decimal
-  (`ToStringIdConverter`).
+  (`ToStringIdConverter`);
+- field plans are cached per `reflect.Type`, so `Ensure` does not re-reflect on
+  every call.
+
+### Test doubles
+
+`NewInjectorFromProvider(provider)` reads the registry on every fill, so a test
+can swap a generator (`provider.Set("order", fixed)`) without rebuilding the
+repository.
 
 ## Install
 

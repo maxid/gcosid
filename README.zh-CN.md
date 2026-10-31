@@ -69,6 +69,79 @@ Go 驱动默认不设。请用 `database.OpenMySQL` 打开连接池（它同时�
 字符串族 44/20/16，按定宽进制字段渲染且不减 epoch；友好格式
 `yyyyMMddHHmmss[SSS]-machine-sequence`。
 
+## ID 注入
+
+CosID 用 `@CosId` 注解，并靠 Spring/MyBatis/Jackson 插件在写库前自动填充。Go 既没有注解，
+也没有这些插件点，所以 gcosid 用 **struct tag + 显式调用**：
+
+```go
+type Order struct {
+    ID     int64 `cosid:"order"`   // 生成器名
+    Amount int64
+}
+```
+
+### 接线方式
+
+```go
+// 1. 每种实体一个生成器
+chain, err := gcosid.NewChainGenerator("order", 100, alloc)
+if err != nil {
+    return err
+}
+defer chain.Close(ctx)
+
+// 2. 注册表：tag 名 → 生成器
+injector := gcosid.NewInjector()
+injector.Register("order", chain)           // 数值字段
+injector.RegisterString("orderNo", orderNo) // 字符串字段
+
+// 3. 仓储是调用点
+type OrderRepo struct {
+    ids *gcosid.Injector
+    db  *sql.DB
+}
+
+func (r *OrderRepo) Create(ctx context.Context, order *Order) error {
+    if _, err := r.ids.Ensure(ctx, order); err != nil {
+        return fmt.Errorf("assign id: %w", err)
+    }
+    // ... INSERT ...
+}
+
+func (r *OrderRepo) CreateBatch(ctx context.Context, orders []*Order) error {
+    if _, err := r.ids.EnsureAll(ctx, orders); err != nil {
+        return fmt.Errorf("assign ids: %w", err)
+    }
+    // ... 批量 INSERT ...
+}
+```
+
+可运行示例见 [`examples/repository`](examples/repository/main.go)。
+
+### 没有自动填充
+
+因为没有框架替你在背后填 id，**跳过 `Ensure` 的写入会插入 0 值主键**。这是唯一需要设计规避的失败模式：
+
+- 在仓储的 create 路径调用 `Ensure`，不要散落在各个 handler 里；
+- `Ensure` 幂等——已有 id 的实体**永不覆盖**，服务层与仓储层各调一次也安全；
+- `EnsureAll` 批量填充并返回实际填充数量；
+- 批量插入必须**先** `EnsureAll` 再拼语句，否则每一行都是 0，主键冲突。
+
+### 规则（对齐 `CosIdAccessor`）
+
+- tag 值是生成器名；`cosid:"-"` 跳过；`cosid:""` 表示共享生成器（`Provider.SetShare`）；
+- 只有 `string` 与各宽度整数能承载 id（CosID 是 `String`/`Long`/`Integer`），其余类型在首次 `Ensure` 就报错；
+- 目标必须是非空指针，指向 struct；
+- 会搜索嵌入 struct，复合实体可继承 id；
+- 数值生成器喂字符串字段时按十进制渲染（`ToStringIdConverter`）；
+- 字段计划按 `reflect.Type` 缓存，热路径不重复反射。
+
+### 测试替身
+
+`NewInjectorFromProvider(provider)` 每次填充都读注册表，测试可热替换生成器
+（`provider.Set("order", fixed)`），不必重建仓储。
+
 ## 测试
 
 | 命令 | 覆盖范围 | 依赖 |
