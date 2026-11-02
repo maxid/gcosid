@@ -1,8 +1,9 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"fmt"
+	"github.com/maxid/gcosid/core"
 	"strconv"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func (m *ManualDistributor) Distribute(_ context.Context, _ string) (int64, erro
 		}
 	}
 	if m.MachineID < 0 {
-		return 0, fmt.Errorf("%w: %d", ErrInvalidMachineID, m.MachineID)
+		return 0, fmt.Errorf("%w: %d", core.ErrInvalidMachineID, m.MachineID)
 	}
 	return m.MachineID, nil
 }
@@ -159,7 +160,7 @@ func (m *MemoryMachineStorage) Distribute(_ context.Context, namespace, instance
 	}
 	candidate := next + 1
 	if candidate > maxMachineID {
-		return MachineState{}, fmt.Errorf("%w: namespace %s exhausted", ErrExhausted, namespace)
+		return MachineState{}, fmt.Errorf("%w: namespace %s exhausted", core.ErrExhausted, namespace)
 	}
 	state := MachineState{MachineID: candidate, LastTimestamp: now, InstanceID: instanceID}
 	m.put(namespace, state)
@@ -174,7 +175,7 @@ func (m *MemoryMachineStorage) Guard(_ context.Context, namespace string, state 
 
 	current, ok := m.slots[namespace+"|"+strconv.FormatInt(state.MachineID, 10)]
 	if !ok || current.InstanceID != state.InstanceID {
-		return fmt.Errorf("%w: slot %d of %s is no longer owned by %s", ErrInvalidMachineID, state.MachineID, namespace, state.InstanceID)
+		return fmt.Errorf("%w: slot %d of %s is no longer owned by %s", core.ErrInvalidMachineID, state.MachineID, namespace, state.InstanceID)
 	}
 	current.LastTimestamp = time.Now().UnixMilli()
 	m.put(namespace, current)
@@ -242,13 +243,13 @@ func WithLeaseSafeGuard(d time.Duration) LeaseOption {
 // the layout's machine-id ceiling.
 func NewLeaseDistributor(storage MachineStateStorage, instanceID string, maxMachineID int64, opts ...LeaseOption) (*LeaseDistributor, error) {
 	if storage == nil {
-		return nil, fmt.Errorf("%w: machine state storage is required", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: machine state storage is required", core.ErrInvalidConfig)
 	}
 	if instanceID == "" {
-		return nil, fmt.Errorf("%w: instance id is required", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: instance id is required", core.ErrInvalidConfig)
 	}
 	if maxMachineID <= 0 {
-		return nil, fmt.Errorf("%w: max machine id must be positive", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: max machine id must be positive", core.ErrInvalidConfig)
 	}
 	l := &LeaseDistributor{
 		storage:    storage,
@@ -310,7 +311,7 @@ func (l *LeaseDistributor) Guard(ctx context.Context, namespace string) error {
 	state, ok := l.local[namespace]
 	if !ok {
 		l.mu.Unlock()
-		return fmt.Errorf("%w: no machine slot for instance %s in %s", ErrInvalidMachineID, l.instanceID, namespace)
+		return fmt.Errorf("%w: no machine slot for instance %s in %s", core.ErrInvalidMachineID, l.instanceID, namespace)
 	}
 	l.mu.Unlock()
 

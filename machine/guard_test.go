@@ -1,8 +1,9 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"errors"
+	"github.com/maxid/gcosid/core"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -109,11 +110,11 @@ func TestGuarderStartStop(t *testing.T) {
 }
 
 func TestGuarderValidatesConfig(t *testing.T) {
-	if _, err := NewGuarder(nil, time.Minute); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewGuarder(nil, time.Minute); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("nil distributor err = %v", err)
 	}
 	guarder, _ := NewGuarder(&trackingDistributor{}, time.Minute)
-	if err := guarder.Register("", InstanceID{ID: "x"}); !errors.Is(err, ErrInvalidConfig) {
+	if err := guarder.Register("", InstanceID{ID: "x"}); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("empty namespace err = %v", err)
 	}
 }

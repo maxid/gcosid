@@ -1,8 +1,9 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"fmt"
+	"github.com/maxid/gcosid/core"
 	"os"
 	"strconv"
 	"strings"
@@ -26,7 +27,7 @@ type StatefulSetDistributor struct {
 // NewStatefulSetDistributor creates the distributor for a layout's machine range.
 func NewStatefulSetDistributor(maxMachineID int64) (*StatefulSetDistributor, error) {
 	if maxMachineID <= 0 {
-		return nil, fmt.Errorf("%w: max machine id must be positive", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: max machine id must be positive", core.ErrInvalidConfig)
 	}
 	return &StatefulSetDistributor{
 		EnvKey:   DefaultHostnameEnv,
@@ -47,7 +48,7 @@ func (d *StatefulSetDistributor) Distribute(context.Context, string) (int64, err
 		return 0, err
 	}
 	if id < 0 || id > d.MaxID {
-		return 0, fmt.Errorf("%w: ordinal %d outside 0..%d", ErrInvalidMachineID, id, d.MaxID)
+		return 0, fmt.Errorf("%w: ordinal %d outside 0..%d", core.ErrInvalidMachineID, id, d.MaxID)
 	}
 	d.resolved = id
 	return id, nil
@@ -66,17 +67,17 @@ func (d *StatefulSetDistributor) ResolveMachineID() (int64, error) {
 
 	hostname, ok := lookup(key)
 	if !ok || hostname == "" {
-		return 0, fmt.Errorf("%w: %s is not set", ErrInvalidConfig, key)
+		return 0, fmt.Errorf("%w: %s is not set", core.ErrInvalidConfig, key)
 	}
 	// StatefulSet names are "<statefulset>-<ordinal>", so the ordinal follows the
 	// last dash. A name without a dash is a configuration error, not id 0.
 	idx := strings.LastIndex(hostname, "-")
 	if idx <= 0 || idx == len(hostname)-1 {
-		return 0, fmt.Errorf("%w: hostname %q has no ordinal", ErrInvalidConfig, hostname)
+		return 0, fmt.Errorf("%w: hostname %q has no ordinal", core.ErrInvalidConfig, hostname)
 	}
 	id, err := strconv.ParseInt(hostname[idx+1:], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%w: hostname %q ordinal is not a number", ErrInvalidConfig, hostname)
+		return 0, fmt.Errorf("%w: hostname %q ordinal is not a number", core.ErrInvalidConfig, hostname)
 	}
 	return id, nil
 }

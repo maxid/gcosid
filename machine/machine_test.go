@@ -1,9 +1,10 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/maxid/gcosid/core"
 	"testing"
 	"time"
 )
@@ -26,12 +27,12 @@ func TestManualDistributorReturnsTheConfiguredID(t *testing.T) {
 }
 
 func TestManualDistributorValidates(t *testing.T) {
-	d := &ManualDistributor{MachineID: 99, Validate: func(int64) error { return ErrInvalidMachineID }}
-	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, ErrInvalidMachineID) {
-		t.Fatalf("err = %v, want ErrInvalidMachineID", err)
+	d := &ManualDistributor{MachineID: 99, Validate: func(int64) error { return core.ErrInvalidMachineID }}
+	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, core.ErrInvalidMachineID) {
+		t.Fatalf("err = %v, want core.ErrInvalidMachineID", err)
 	}
 
-	if _, err := (&ManualDistributor{MachineID: -1}).Distribute(context.Background(), "order"); !errors.Is(err, ErrInvalidMachineID) {
+	if _, err := (&ManualDistributor{MachineID: -1}).Distribute(context.Background(), "order"); !errors.Is(err, core.ErrInvalidMachineID) {
 		t.Fatalf("negative err = %v", err)
 	}
 }
@@ -84,8 +85,8 @@ func TestLeaseDistributorExhausts(t *testing.T) {
 	}
 
 	d, _ := NewLeaseDistributor(storage, "node-c", 1)
-	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, ErrExhausted) {
-		t.Fatalf("err = %v, want ErrExhausted", err)
+	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, core.ErrExhausted) {
+		t.Fatalf("err = %v, want core.ErrExhausted", err)
 	}
 }
 
@@ -147,19 +148,19 @@ func TestLeaseDistributorGuard(t *testing.T) {
 
 	// An instance with no slot cannot guard one.
 	orphan, _ := NewLeaseDistributor(storage, "node-z", 4)
-	if err := orphan.Guard(context.Background(), "order"); !errors.Is(err, ErrInvalidMachineID) {
-		t.Fatalf("orphan guard err = %v, want ErrInvalidMachineID", err)
+	if err := orphan.Guard(context.Background(), "order"); !errors.Is(err, core.ErrInvalidMachineID) {
+		t.Fatalf("orphan guard err = %v, want core.ErrInvalidMachineID", err)
 	}
 }
 
 func TestNewLeaseDistributorRejectsBadConfig(t *testing.T) {
-	if _, err := NewLeaseDistributor(nil, "node", 10); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewLeaseDistributor(nil, "node", 10); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("nil storage err = %v", err)
 	}
-	if _, err := NewLeaseDistributor(NewMemoryMachineStorage(), "", 10); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewLeaseDistributor(NewMemoryMachineStorage(), "", 10); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("empty instance err = %v", err)
 	}
-	if _, err := NewLeaseDistributor(NewMemoryMachineStorage(), "node", 0); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewLeaseDistributor(NewMemoryMachineStorage(), "node", 0); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("zero max err = %v", err)
 	}
 }

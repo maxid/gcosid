@@ -169,6 +169,20 @@ GCOSID_REDIS_IMAGE=registry.example.com/library/redis:7 \
 go test -tags=integration ./...
 ```
 
+## 布局
+
+根包是门面：构造器（`NewSegmentGenerator`、`NewSnowflake`、`NewStringCosIDGenerator` 等）、
+`Provider` 注册表与依赖注入。两个子包承载共用或可独立复用的部分：
+
+| 包 | 内容 |
+|---|---|
+| [`core`](core/) | 词汇表：`Generator`/`NamedGenerator`/`StringConverter`、号段模型与分配 SPI、进制/前后缀/日期词汇、雪花 `Layout`、`Stat` 树 |
+| [`machine`](machine/) | 机器号分配：手动、租约与 StatefulSet 三种分发器、续租守卫、本地状态文件 |
+
+两者都由根包以类型别名重新导出，因此 `gcosid.MachineState` 与 `machine.MachineState` 是同一种
+类型，已有代码照旧可用。`database/`、`redis/` 实现分配器与机器状态 SPI，直接 import `machine`
+取得它们实现的接口。
+
 ## 安装
 
 ```bash

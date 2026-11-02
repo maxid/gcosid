@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/maxid/gcosid"
+	"github.com/maxid/gcosid/machine"
 )
 
 // The scripts below are CosID 2.15.1's machine_id_distribute / _guard / _revert
@@ -163,7 +164,7 @@ end
 return 0;
 `
 
-// MachineStorage implements gcosid.MachineStateStorage with CosID's three Lua
+// MachineStorage implements machine.MachineStateStorage with CosID's three Lua
 // scripts. The keys, the value format and the safe-guard predicate are the Java
 // ones, so a Go process and a Java process share one slot table.
 type MachineStorage struct {
@@ -214,30 +215,30 @@ func NewMachineStorage(client Client, namespace string, opts ...MachineOption) (
 	return m, nil
 }
 
-// Distribute implements gcosid.MachineStateStorage.
-func (m *MachineStorage) Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (gcosid.MachineState, error) {
+// Distribute implements machine.MachineStateStorage.
+func (m *MachineStorage) Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (machine.MachineState, error) {
 	if namespace == "" {
 		namespace = m.namespace
 	}
 	now := m.now()
 	reply, err := m.client.Eval(ctx, distributeScript, []string{namespace},
-		instanceID, maxMachineID, now, gcosid.SafeGuardAt(now, m.effectiveSafeGuard(safeGuard), stable))
+		instanceID, maxMachineID, now, machine.SafeGuardAt(now, m.effectiveSafeGuard(safeGuard), stable))
 	if err != nil {
-		return gcosid.MachineState{}, fmt.Errorf("%w: machine distribute: %w", gcosid.ErrAllocatorUnavailable, err)
+		return machine.MachineState{}, fmt.Errorf("%w: machine distribute: %w", gcosid.ErrAllocatorUnavailable, err)
 	}
 
 	machineID, lastStamp, err := parseState(reply)
 	if err != nil {
-		return gcosid.MachineState{}, err
+		return machine.MachineState{}, err
 	}
 	if machineID < 0 {
-		return gcosid.MachineState{}, fmt.Errorf("%w: namespace %s exhausted", gcosid.ErrExhausted, namespace)
+		return machine.MachineState{}, fmt.Errorf("%w: namespace %s exhausted", gcosid.ErrExhausted, namespace)
 	}
-	return gcosid.MachineState{MachineID: machineID, LastTimestamp: lastStamp, InstanceID: instanceID}, nil
+	return machine.MachineState{MachineID: machineID, LastTimestamp: lastStamp, InstanceID: instanceID}, nil
 }
 
-// Guard implements gcosid.MachineStateStorage (the guard script).
-func (m *MachineStorage) Guard(ctx context.Context, namespace string, state gcosid.MachineState, _ time.Duration, _ bool) error {
+// Guard implements machine.MachineStateStorage (the guard script).
+func (m *MachineStorage) Guard(ctx context.Context, namespace string, state machine.MachineState, _ time.Duration, _ bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}
@@ -251,10 +252,10 @@ func (m *MachineStorage) Guard(ctx context.Context, namespace string, state gcos
 	return nil
 }
 
-// Revert implements gcosid.MachineStateStorage (the revert script). The script
+// Revert implements machine.MachineStateStorage (the revert script). The script
 // keeps the instance id and moves the slot to the revert hash, which is CosID's
 // behaviour for both stable and unstable instances on Redis.
-func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string, _ gcosid.MachineState, _ bool) error {
+func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string, _ machine.MachineState, _ bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}

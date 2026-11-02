@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/maxid/gcosid"
+	"github.com/maxid/gcosid/machine"
 )
 
 // The statements below are CosID 2.15.1's JdbcMachineIdDistributor verbatim.
@@ -42,7 +43,7 @@ const (
 		where namespace=? and instance_id=? and machine_id=?`
 )
 
-// MachineStorage implements gcosid.MachineStateStorage on `cosid_machine`.
+// MachineStorage implements machine.MachineStateStorage on `cosid_machine`.
 type MachineStorage struct {
 	db        *sql.DB
 	namespace string
@@ -84,121 +85,121 @@ func NewMachineStorage(db *sql.DB, namespace string, opts ...MachineStorageOptio
 	return m, nil
 }
 
-// Distribute implements gcosid.MachineStateStorage with CosID's exact order:
+// Distribute implements machine.MachineStateStorage with CosID's exact order:
 // distributeBySelf, then distributeByRevert, then distributeMachine.
-func (m *MachineStorage) Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (gcosid.MachineState, error) {
+func (m *MachineStorage) Distribute(ctx context.Context, namespace, instanceID string, maxMachineID int64, safeGuard time.Duration, stable bool) (machine.MachineState, error) {
 	if namespace == "" {
 		namespace = m.namespace
 	}
 	tx, err := m.db.BeginTx(ctx, nil)
 	if err != nil {
-		return gcosid.MachineState{}, fmt.Errorf("gcosid/database: machine begin: %w", err)
+		return machine.MachineState{}, fmt.Errorf("gcosid/database: machine begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if state, ok, err := m.distributeBySelf(ctx, tx, namespace, instanceID, safeGuard, stable); err != nil {
-		return gcosid.MachineState{}, err
+		return machine.MachineState{}, err
 	} else if ok {
 		if err := tx.Commit(); err != nil {
-			return gcosid.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
+			return machine.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
 		}
 		return state, nil
 	}
 
 	if state, ok, err := m.distributeByRevert(ctx, tx, namespace, instanceID, safeGuard, stable); err != nil {
-		return gcosid.MachineState{}, err
+		return machine.MachineState{}, err
 	} else if ok {
 		if err := tx.Commit(); err != nil {
-			return gcosid.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
+			return machine.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
 		}
 		return state, nil
 	}
 
 	state, err := m.distributeMachine(ctx, tx, namespace, instanceID, maxMachineID, 0)
 	if err != nil {
-		return gcosid.MachineState{}, err
+		return machine.MachineState{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return gcosid.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
+		return machine.MachineState{}, fmt.Errorf("gcosid/database: machine commit: %w", err)
 	}
 	return state, nil
 }
 
-func (m *MachineStorage) distributeBySelf(ctx context.Context, tx *sql.Tx, namespace, instanceID string, safeGuard time.Duration, stable bool) (gcosid.MachineState, bool, error) {
+func (m *MachineStorage) distributeBySelf(ctx context.Context, tx *sql.Tx, namespace, instanceID string, safeGuard time.Duration, stable bool) (machine.MachineState, bool, error) {
 	var machineID, lastTimestamp int64
 	err := tx.QueryRowContext(ctx, getMachineStateSQL, namespace, instanceID,
-		gcosid.SafeGuardAt(m.now(), safeGuard, stable)).Scan(&machineID, &lastTimestamp)
+		machine.SafeGuardAt(m.now(), safeGuard, stable)).Scan(&machineID, &lastTimestamp)
 	if errors.Is(err, sql.ErrNoRows) {
-		return gcosid.MachineState{}, false, nil
+		return machine.MachineState{}, false, nil
 	}
 	if err != nil {
-		return gcosid.MachineState{}, false, fmt.Errorf("gcosid/database: machine self: %w", err)
+		return machine.MachineState{}, false, fmt.Errorf("gcosid/database: machine self: %w", err)
 	}
 
 	// CosID stamps the slot with now and returns that state.
-	state := gcosid.MachineState{MachineID: machineID, LastTimestamp: m.now(), InstanceID: instanceID}
+	state := machine.MachineState{MachineID: machineID, LastTimestamp: m.now(), InstanceID: instanceID}
 	if err := m.guardTx(ctx, tx, namespace, state); err != nil {
-		return gcosid.MachineState{}, false, err
+		return machine.MachineState{}, false, err
 	}
 	return state, true, nil
 }
 
-func (m *MachineStorage) distributeByRevert(ctx context.Context, tx *sql.Tx, namespace, instanceID string, safeGuard time.Duration, stable bool) (gcosid.MachineState, bool, error) {
+func (m *MachineStorage) distributeByRevert(ctx context.Context, tx *sql.Tx, namespace, instanceID string, safeGuard time.Duration, stable bool) (machine.MachineState, bool, error) {
 	var machineID, lastTimestamp int64
 	err := tx.QueryRowContext(ctx, getRevertMachineStateSQL, namespace,
-		gcosid.SafeGuardAt(m.now(), safeGuard, stable)).Scan(&machineID, &lastTimestamp)
+		machine.SafeGuardAt(m.now(), safeGuard, stable)).Scan(&machineID, &lastTimestamp)
 	if errors.Is(err, sql.ErrNoRows) {
-		return gcosid.MachineState{}, false, nil
+		return machine.MachineState{}, false, nil
 	}
 	if err != nil {
-		return gcosid.MachineState{}, false, fmt.Errorf("gcosid/database: machine revert select: %w", err)
+		return machine.MachineState{}, false, fmt.Errorf("gcosid/database: machine revert select: %w", err)
 	}
 
 	now := m.now()
 	res, err := tx.ExecContext(ctx, distributeRevertMachineStateSQL, instanceID, now, now,
-		m.key(namespace, machineID), gcosid.SafeGuardAt(now, safeGuard, stable))
+		m.key(namespace, machineID), machine.SafeGuardAt(now, safeGuard, stable))
 	if err != nil {
-		return gcosid.MachineState{}, false, fmt.Errorf("gcosid/database: machine revert claim: %w", err)
+		return machine.MachineState{}, false, fmt.Errorf("gcosid/database: machine revert claim: %w", err)
 	}
 	affected, err := res.RowsAffected()
 	if err != nil || affected == 0 {
-		return gcosid.MachineState{}, false, nil
+		return machine.MachineState{}, false, nil
 	}
 	// CosID returns the *previous* timestamp it read, not the new one.
-	return gcosid.MachineState{MachineID: machineID, LastTimestamp: lastTimestamp, InstanceID: instanceID}, true, nil
+	return machine.MachineState{MachineID: machineID, LastTimestamp: lastTimestamp, InstanceID: instanceID}, true, nil
 }
 
-func (m *MachineStorage) distributeMachine(ctx context.Context, tx *sql.Tx, namespace, instanceID string, maxMachineID int64, attempt int) (gcosid.MachineState, error) {
+func (m *MachineStorage) distributeMachine(ctx context.Context, tx *sql.Tx, namespace, instanceID string, maxMachineID int64, attempt int) (machine.MachineState, error) {
 	var next sql.NullInt64
 	if err := tx.QueryRowContext(ctx, nextMachineIDSQL, namespace).Scan(&next); err != nil {
-		return gcosid.MachineState{}, fmt.Errorf("gcosid/database: machine next id: %w", err)
+		return machine.MachineState{}, fmt.Errorf("gcosid/database: machine next id: %w", err)
 	}
 	// `max(machine_id)+1` over an empty table is NULL, and CosID's getInt turns
 	// NULL into 0 — the first machine id is 0, not 1.
 	machineID := next.Int64
 
 	if machineID > maxMachineID {
-		return gcosid.MachineState{}, fmt.Errorf("%w: namespace %s exhausted at %d", gcosid.ErrExhausted, namespace, machineID)
+		return machine.MachineState{}, fmt.Errorf("%w: namespace %s exhausted at %d", gcosid.ErrExhausted, namespace, machineID)
 	}
 
 	now := m.now()
 	_, err := tx.ExecContext(ctx, distributeMachineSQL,
 		m.key(namespace, machineID), namespace, machineID, now, instanceID, now)
 	if err == nil {
-		return gcosid.MachineState{MachineID: machineID, LastTimestamp: now, InstanceID: instanceID}, nil
+		return machine.MachineState{MachineID: machineID, LastTimestamp: now, InstanceID: instanceID}, nil
 	}
 
 	// Another instance took the id between the SELECT and the INSERT: CosID
 	// retries the whole distribution.
 	if attempt >= m.maxDistributeRetries {
-		return gcosid.MachineState{}, fmt.Errorf("%w: machine insert retries exhausted: %v", gcosid.ErrAllocatorUnavailable, err)
+		return machine.MachineState{}, fmt.Errorf("%w: machine insert retries exhausted: %v", gcosid.ErrAllocatorUnavailable, err)
 	}
 	return m.distributeMachine(ctx, tx, namespace, instanceID, maxMachineID, attempt+1)
 }
 
-// Guard implements gcosid.MachineStateStorage: one UPDATE, and zero affected rows
+// Guard implements machine.MachineStateStorage: one UPDATE, and zero affected rows
 // means the lease is gone (CosID's MachineIdLostException).
-func (m *MachineStorage) Guard(ctx context.Context, namespace string, state gcosid.MachineState, _ time.Duration, _ bool) error {
+func (m *MachineStorage) Guard(ctx context.Context, namespace string, state machine.MachineState, _ time.Duration, _ bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}
@@ -217,7 +218,7 @@ func (m *MachineStorage) Guard(ctx context.Context, namespace string, state gcos
 	return nil
 }
 
-func (m *MachineStorage) guardTx(ctx context.Context, tx *sql.Tx, namespace string, state gcosid.MachineState) error {
+func (m *MachineStorage) guardTx(ctx context.Context, tx *sql.Tx, namespace string, state machine.MachineState) error {
 	res, err := tx.ExecContext(ctx, guardMachineStateSQL, state.LastTimestamp, namespace, state.InstanceID, state.MachineID)
 	if err != nil {
 		return fmt.Errorf("gcosid/database: machine guard: %w", err)
@@ -233,9 +234,9 @@ func (m *MachineStorage) guardTx(ctx context.Context, tx *sql.Tx, namespace stri
 	return nil
 }
 
-// Revert implements gcosid.MachineStateStorage. Unstable instances clear the
+// Revert implements machine.MachineStateStorage. Unstable instances clear the
 // owner so the slot is immediately reusable; stable instances keep it.
-func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string, state gcosid.MachineState, stable bool) error {
+func (m *MachineStorage) Revert(ctx context.Context, namespace, instanceID string, state machine.MachineState, stable bool) error {
 	if namespace == "" {
 		namespace = m.namespace
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maxid/gcosid"
+	"github.com/maxid/gcosid/machine"
 )
 
 type fakeClient struct {
@@ -124,13 +125,13 @@ func TestMachineGuardRequiresASlot(t *testing.T) {
 	fake := &fakeClient{reply: int64(0)}
 	storage, _ := NewMachineStorage(fake, "xdmp")
 
-	err := storage.Guard(context.Background(), "xdmp", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false)
+	err := storage.Guard(context.Background(), "xdmp", machine.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false)
 	if !errors.Is(err, gcosid.ErrInvalidConfig) {
 		t.Fatalf("err = %v, want ErrInvalidConfig", err)
 	}
 
 	fake.reply = int64(1)
-	if err := storage.Guard(context.Background(), "xdmp", gcosid.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false); err != nil {
+	if err := storage.Guard(context.Background(), "xdmp", machine.MachineState{MachineID: 1, InstanceID: "node-a"}, time.Minute, false); err != nil {
 		t.Fatalf("guard: %v", err)
 	}
 }
@@ -139,7 +140,7 @@ func TestMachineRevertUsesTheScript(t *testing.T) {
 	fake := &fakeClient{reply: int64(1)}
 	storage, _ := NewMachineStorage(fake, "xdmp", WithClock(func() int64 { return 42 }))
 
-	err := storage.Revert(context.Background(), "xdmp", "node-a", gcosid.MachineState{MachineID: 1}, false)
+	err := storage.Revert(context.Background(), "xdmp", "node-a", machine.MachineState{MachineID: 1}, false)
 	if err != nil {
 		t.Fatalf("revert: %v", err)
 	}

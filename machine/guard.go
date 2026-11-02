@@ -1,8 +1,9 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"fmt"
+	"github.com/maxid/gcosid/core"
 	"sync"
 	"time"
 )
@@ -87,7 +88,7 @@ func WithGuardClock(now func() time.Time) GuarderOption {
 // NewGuarder creates a guarder for a distributor.
 func NewGuarder(distributor MachineIdDistributor, safeGuard time.Duration, opts ...GuarderOption) (*Guarder, error) {
 	if distributor == nil {
-		return nil, fmt.Errorf("%w: distributor is required", ErrInvalidConfig)
+		return nil, fmt.Errorf("%w: distributor is required", core.ErrInvalidConfig)
 	}
 	if safeGuard <= 0 {
 		safeGuard = 10 * time.Minute
@@ -109,7 +110,7 @@ func NewGuarder(distributor MachineIdDistributor, safeGuard time.Duration, opts 
 // Register starts guarding the slot of (namespace, instance).
 func (g *Guarder) Register(namespace string, instance InstanceID) error {
 	if namespace == "" {
-		return fmt.Errorf("%w: namespace is required", ErrInvalidConfig)
+		return fmt.Errorf("%w: namespace is required", core.ErrInvalidConfig)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

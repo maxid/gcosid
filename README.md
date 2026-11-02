@@ -200,6 +200,22 @@ the zero id. That is the one failure mode to design against:
 can swap a generator (`provider.Set("order", fixed)`) without rebuilding the
 repository.
 
+## Layout
+
+The root package is the facade: the constructors (`NewSegmentGenerator`, `NewSnowflake`,
+`NewStringCosIDGenerator`, ...), the `Provider` registry and the dependency injection. Two
+subpackages hold the parts that are shared or independently useful:
+
+| Package | Holds |
+|---|---|
+| [`core`](core/) | the vocabulary: `Generator`/`NamedGenerator`/`StringConverter`, the segment model and allocator SPI, the radix/prefix/date vocabulary, the snowflake `Layout`, and the `Stat` tree |
+| [`machine`](machine/) | machine-id distribution: manual, lease-based and StatefulSet distributors, the guard that renews the lease, and the local state file |
+
+Both are re-exported from the root package as aliases, so `gcosid.MachineState` and
+`machine.MachineState` are the same type and existing code keeps working. `database/` and
+`redis/` implement the allocator and machine-state SPIs and import `machine` directly for
+the interfaces they implement.
+
 ## Install
 
 ```bash

@@ -1,4 +1,4 @@
-package gcosid
+package machine
 
 import (
 	"encoding/json"

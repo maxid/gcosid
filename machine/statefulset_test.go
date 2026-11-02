@@ -1,8 +1,9 @@
-package gcosid
+package machine
 
 import (
 	"context"
 	"errors"
+	"github.com/maxid/gcosid/core"
 	"testing"
 )
 
@@ -47,8 +48,8 @@ func TestStatefulSetRejectsBadHostnames(t *testing.T) {
 	for _, hostname := range []string{"", "nodash", "-5", "xdmp-iot-", "xdmp-iot-abc"} {
 		d, _ := NewStatefulSetDistributor(1023)
 		d.Lookup = hostnameLookup(hostname)
-		if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, ErrInvalidConfig) {
-			t.Errorf("%q err = %v, want ErrInvalidConfig", hostname, err)
+		if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, core.ErrInvalidConfig) {
+			t.Errorf("%q err = %v, want core.ErrInvalidConfig", hostname, err)
 		}
 	}
 }
@@ -56,8 +57,8 @@ func TestStatefulSetRejectsBadHostnames(t *testing.T) {
 func TestStatefulSetRejectsOrdinalOutsideLayout(t *testing.T) {
 	d, _ := NewStatefulSetDistributor(3)
 	d.Lookup = hostnameLookup("xdmp-iot-4")
-	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, ErrInvalidMachineID) {
-		t.Fatalf("err = %v, want ErrInvalidMachineID", err)
+	if _, err := d.Distribute(context.Background(), "order"); !errors.Is(err, core.ErrInvalidMachineID) {
+		t.Fatalf("err = %v, want core.ErrInvalidMachineID", err)
 	}
 }
 
@@ -74,7 +75,7 @@ func TestStatefulSetGuardAndRevertAreNoops(t *testing.T) {
 }
 
 func TestNewStatefulSetDistributorValidates(t *testing.T) {
-	if _, err := NewStatefulSetDistributor(0); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := NewStatefulSetDistributor(0); !errors.Is(err, core.ErrInvalidConfig) {
 		t.Fatalf("zero max err = %v", err)
 	}
 }

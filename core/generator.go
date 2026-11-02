@@ -1,13 +1,4 @@
-// Package gcosid allocates unique identifiers.
-//
-// The public surface mirrors CosID's capability set: segment (number-range)
-// allocation with double buffering, snowflake IDs with a configurable bit
-// layout, machine-id distribution, and the string converters (radix, prefix,
-// group, snowflake-friendly). Which strategy a consumer uses is their decision;
-// the library provides all of them and never silently mixes their layouts.
-//
-// Status: experimental (v0.0.0-dev). The API is not stable yet.
-package gcosid
+package core
 
 import (
 	"context"

@@ -400,7 +400,7 @@ func (c SnowflakeConverter) ToTime(value any) (time.Time, error) {
 		id = int64(v)
 	case string:
 		if c.Radix == nil {
-			parsed, err := ToString{}.parse(v)
+			parsed, err := ToString{}.Parse(v)
 			if err != nil {
 				return time.Time{}, err
 			}
